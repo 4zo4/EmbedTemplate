@@ -1,0 +1,10 @@
+[submodule "third_party/os/freertos"]
+	path = third_party/os/freertos
+	url = https://github.com/FreeRTOS/FreeRTOS-Kernel.git
+[submodule "third_party/bsp/tf-a"]
+	path = third_party/bsp/tf-a
+	url = https://github.com/ARM-software/arm-trusted-firmware.git
+[submodule "tools/peakrdl"]
+	path = tools/peakrdl
+	url = https://github.com/4zo4/PeakRDL-cheader
+	branch = feature/custom-templates
