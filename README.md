@@ -26,39 +26,46 @@ A modular C/C++ SDK and project template for SoC FW development and HW testing. 
 
  - **Python**: `python3`
  - **PeakRDL Tool**: `peakrdl`
- ```bash
- python3 -m pip install peakrdl
+
+ ~~~bash
+    python3 -m pip install peakrdl
+ ~~~
 
  - **PeakRDL C header generator package**: `peakrdl-cheader`
- ```bash
+
+ ~~~bash
     python3 -m pip install peakrdl-cheader
+ ~~~
 
 ### 2. Initialization
 
 If you just cloned this repository, initialize the submodules:
 
- ```bash
+ ~~~bash
     git submodule update --init --recursive
+ ~~~
 
 ### 3. Build
 
- ```bash
+ ~~~bash
     # Build with Ninja
     cmake -G Ninja -S . -B build
     cmake --build build
 
     # Build without tests and RTOS
     cmake -B build -DRTOS=OFF -DTEST=OFF && cmake --build build
+ ~~~
 
 ### 4. Run
 
- ```bash
-    embed_template$ ./build/port/runner
+ ~~~bash
+    ./build/port/runner
+ ~~~
 
 ## Modular SDK Framework
 
 ### Bare-metal C Lib
-- **TF-A C lib Port**: Ported a limited set of bare-metal optimized Trusted Firmware Architecture (TF-A) C libraries for use with all components, including the FreeRTOS kernel.
+- **TF-A C lib Port**: Ported a limited set of bare-metal optimized TF-A standard C library APIs for use across all components, including the FreeRTOS kernel.
 
 ### Interactive CLI
 - **Reworked Embedded-CLI**: A customized, low-overhead interface for live system interaction, featuring an optimized O(1) hashed autocomplete lookup instead of the original linear `strcmp` loop. The new design extends the autocomplete feature to command arguments.
