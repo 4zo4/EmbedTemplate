@@ -1,0 +1,76 @@
+addrmap gpio_ctrl {
+    name = "8-bit GPIO Controller";
+    addressing = compact;
+    default regwidth = 32;
+
+    // --- Configuration & Data ---
+    reg { field { sw = rw; hw = r; reset = 8'h00; } pin_dir[7:0]; } dir @ 0x00;
+    reg { field { sw = rw; hw = r; reset = 8'h00; } pin_out[7:0]; } out @ 0x04;
+    reg { field { sw = r;  hw = w; } pin_in[7:0];
+          field { sw = r;  hw = w; reset = 1'b0; } alarm[8:8]; } in @ 0x08;
+
+    // --- Atomic Control ---
+    reg { field { sw = w; onwrite = woset; } set_bits[7:0]; } set @ 0x0C;
+    reg { field { sw = w; onwrite = woclr; } clr_bits[7:0]; } clr @ 0x10;
+
+    // --- Interrupt Logic ---
+
+    reg {
+        name = "Interrupt Enable";
+        field { sw = rw; hw = r; reset = 16'h0000; } en[15:0];
+    } int_en @ 0x14;
+
+    reg {
+        name = "Interrupt Status";
+        // status[15:0] now covers Bit 8 (Alarm)
+        field { intr; sw = rw; woclr; hw = w; } status[15:0];
+    } int_sts @ 0x18;
+
+    reg {
+        name = "Interrupt Type";
+        field { sw = rw; hw = r; reset = 16'h0000; } typ[15:0]; 
+    } int_type @ 0x1C;
+
+    reg {
+        name = "Interrupt Polarity";
+        field { sw = rw; hw = r; reset = 16'h0000; } pol[15:0];
+    } int_pol @ 0x20;
+
+    // Watchdog Configuration Register
+    reg {
+        name = "WDT Config";
+        field {
+            name = "Prescaler";
+            desc = "Tick speed divider. 0=1ms, 1=10ms, 2=100ms";
+            sw = rw; hw = r;
+            reset = 2'b00;
+        } prescale[1:0];
+        // Bit 8
+        field {
+            name = "WDT_EN";
+            desc = "1: Enable Watchdog, 0: Disable";
+            sw = rw; hw = r;
+            reset = 1'b0;
+        } en[8:8];
+    } wdt_cfg @ 0x24;
+
+    // Watchdog Timer Value / Kick
+    reg {
+        name = "WDT Value";
+        desc = "Current timer value. Write to reload with timeout_reload value.";
+        field {
+            sw = rw; hw = rw;
+            reset = 8'hFF;
+        } timer[7:0];
+    } wdt_val @ 0x28;
+
+    // Watchdog Reload Constant
+    reg {
+        name = "WDT Reload Value";
+        desc = "The value loaded into timer when a kick occurs.";
+        field {
+            sw = rw; hw = r;
+            reset = 8'h64; // Default ~100ms if prescaler is 1ms
+        } reload[7:0];
+    } wdt_reload @ 0x2C;
+ };
