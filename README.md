@@ -45,6 +45,12 @@ If you just cloned this repository, initialize the submodules:
     git submodule update --init --recursive
  ~~~
 
+and for code development, install the pre-commit hook:
+
+ ~~~bash
+    pre-commit install
+ ~~~
+
 ### 3. Build
 
  ~~~bash
