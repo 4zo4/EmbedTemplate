@@ -54,6 +54,7 @@ typedef enum {
 
 #define NUM_SYS_BLOCKS MAX_INFRA_INDEX
 
+// clang-format off
 #define BITS_REQUIRED(n) \
     ((n) < 2   ? 1 : \
      (n) < 4   ? 2 : \
@@ -64,7 +65,7 @@ typedef enum {
      (n) < 128 ? 7 : \
      (n) < 256 ? 8 : \
                  16)
-
+// clang-format on
 #define ENTITY_BITS BITS_REQUIRED(MAX_ENTITY - 1)
 #define DOMAIN_BITS BITS_REQUIRED(MAX_DOMAIN - 1)
 

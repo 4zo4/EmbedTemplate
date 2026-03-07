@@ -60,8 +60,7 @@ static uint8_t   entity_map[ENTITY_MAP_SIZE];
 static name_id_t entity_tbl[MAX_ENTITY];
 static uint8_t   level_map[LOG_LEVEL_MAP_SIZE];
 static name_id_t level_tbl[NUM_LOG_LEVELS];
-static int       level_id[NUM_LOG_LEVELS] = {LOG_LEVEL_NONE,    LOG_LEVEL_CRITICAL, LOG_LEVEL_ERROR,
-                                             LOG_LEVEL_WARNING, LOG_LEVEL_INFO,     LOG_LEVEL_DEBUG};
+static int       level_id[NUM_LOG_LEVELS] = {LOG_LEVEL_NONE, LOG_LEVEL_CRITICAL, LOG_LEVEL_ERROR, LOG_LEVEL_WARNING, LOG_LEVEL_INFO, LOG_LEVEL_DEBUG};
 
 // -- End of globals --
 

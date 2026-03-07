@@ -284,12 +284,14 @@ void log_formatter(uint8_t domain, uint8_t entity, uint8_t level, uint64_t ts, c
 {
     (void)len; // unused
 
-    uint32_t    us = (uint32_t)(ts % 1000000), tsec = (uint32_t)(ts / 1000000);
-    uint32_t    sec = tsec % 60, min = (tsec / 60) % 60, hour = (tsec / 3600) % 24, days = tsec / 86400;
+    uint32_t us = (uint32_t)(ts % 1000000), tsec = (uint32_t)(ts / 1000000);
+    uint32_t sec = tsec % 60, min = (tsec / 60) % 60, hour = (tsec / 3600) % 24, days = tsec / 86400;
+    // clang-format off
     const char *color = (domain == DOMAIN_SYS) ? UI_COLOR_YELLOW :
                         (domain == DOMAIN_DEV) ? UI_COLOR_GREEN :
                                                  UI_COLOR_CYAN;
-    int         target_line = (domain == DOMAIN_TEST) ? LOG_REGION_START : (LOG_REGION_START + LOG_REGION_OFFSET);
+    // clang-format on
+    int target_line = (domain == DOMAIN_TEST) ? LOG_REGION_START : (LOG_REGION_START + LOG_REGION_OFFSET);
 
     printf(TERM_CURSOR_SAVE);
     printf(TERM_RESET_SCROLL_REGION);

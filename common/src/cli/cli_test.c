@@ -194,8 +194,7 @@ static void set_test_registry_bindings(EmbeddedCli *cli, const test_registry_t *
         );
         for (int j = 0; j < reg[i].count; j++) {
             embeddedCliAddBinding(
-                cli, (CliCommandBinding
-                     ){.name = reg[i].tests[j].name, .context = (void *)&reg[i].tests[j], .binding = on_execute_test}
+                cli, (CliCommandBinding){.name = reg[i].tests[j].name, .context = (void *)&reg[i].tests[j], .binding = on_execute_test}
             );
         }
     }

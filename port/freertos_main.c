@@ -481,8 +481,10 @@ void run_temperature_regulation(volatile gpio_ctrl_t *gpio)
         alarm_triggered = false;
         // Acknowledge the alarm, i.e. clear its interrupt status
         gpio_clear_interrupt(gpio, 8);
+        // clang-format off
         LOG_SYS_INFO("Temperature %d°C dropped below the threshold " STR(TEMP_TARGET) "°C, "
-                      "starting cooldown", temp);
+                     "starting cooldown", temp);
+        // clang-format on
     }
 
     if (is_cooldown) {
@@ -497,8 +499,10 @@ void run_temperature_regulation(volatile gpio_ctrl_t *gpio)
                 is_critical = false;
                 gpio_clear_out_pin(gpio, 2); // Fan 2 OFF
             }
+            // clang-format off
             LOG_SYS_INFO("Temperature %d°C dropped below the threshold " STR(COOLDOWN_TARGET) "°C, "
-                          "resuming normal operation", temp);
+                         "resuming normal operation", temp);
+            // clang-format on
         }
     }
 
