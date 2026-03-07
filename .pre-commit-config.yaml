@@ -1,0 +1,10 @@
+repos:
+  - repo: local
+    hooks:
+      - id: clang-format
+        name: clang-format
+        entry: clang-format
+        language: system
+        types_or: [c, c++, cuda, objective-c, objective-c++]
+        args: ["-i", "-style=file"]
+        exclude: ^(third_party/|build/|tools/|src/drivers/include/regs/|.*\.git/)
