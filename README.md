@@ -74,7 +74,7 @@ and for code development, install the pre-commit hook:
 - **TF-A C lib Port**: Ported a limited set of bare-metal optimized TF-A standard C library APIs for use across all components, including the FreeRTOS kernel.
 
 ### Interactive CLI
-- **Reworked Embedded-CLI**: A customized, low-overhead interface for live system interaction, featuring an optimized O(1) hashed autocomplete lookup instead of the original linear `strcmp` loop. The new design extends the autocomplete feature to command arguments.
+- **Reworked Embedded-CLI**: A customized, low-overhead interface for live system interaction, featuring an optimized **O(1) hashed autocomplete** lookup instead of the original linear `strcmp` loop. The design extends autocomplete support to command arguments and utilizes a **Look-Aside Buffer (Shadow Index Map)** to bypass linear searches. This implementation preserves a 50% load factor with minimal memory overhead via a segmented bitmap.
 - **Dynamic Control**: Start/Stop simulations, and trigger tests directly from the console.
 - **Static Allocation**: Zero-heap design ensuring reliability for bare-metal or RTOS environments.
 
@@ -104,7 +104,13 @@ The provided `DEV` entities (GPIO, UART, etc.) are included as a **functional de
   - `set log <domain> <entity> <level>` (Change verbosity on-the-fly)
 
 ### FreeRTOS-based Thermal Simulation Example
-The project features a FreeRTOS-based thermal regulation simulation (Heater/Fan/Alarm) controlled via GPIO, which starts in a suspended state and can be interactively managed through the system CLI. The simulation's FreeRTOS is Zero-heap (static).
-1. **Start**: Enter `system` menu and type `start`.
-2. **Monitor**: Watch `[SYS:SIM]` and `[DEV:GPIO]` logs for temperature transitions and fan control.
-3. **Filter**: Use `set log sys sim none` to silence simulation logs while running a driver test.
+This project implements a high-fidelity **Process, Voltage, and Temperature (PVT)** thermal simulation. It models the high-temperature reliability testing used to qualify semiconductors for extreme environments or to accelerate aging for High-Temperature Operating Life (HTOL) estimates.
+
+The simulation demonstrates GPIO-driven actuation of off-chip components. It manages external power for heating and high-RPM cooling fans (Fan 1 and Fan 2) through a standardized digital interface.
+
+The simulation is Zero-Heap Architecture for deterministic performance in embedded environments.
+
+1. **Enable Logs**: `set log sys sim info` enable the thermal transition and regulation logs.
+2. **Launch Simulation**: Enter `system` menu and type `start.`
+3. **Monitor**: Watch `[SYS:SIM]` logs for real-time temperature telemetry, state changes, and Alarm triggers.
+4. **Filter**: Use `set log sys sim none` to silence simulation telemetry while running a driver test.
