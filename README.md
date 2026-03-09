@@ -74,7 +74,7 @@ and for code development, install the pre-commit hook:
 - **TF-A C lib Port**: Ported a limited set of bare-metal optimized TF-A standard C library APIs for use across all components, including the FreeRTOS kernel.
 
 ### Interactive CLI
-- **Reworked Embedded-CLI**: A customized, low-overhead interface for live system interaction, featuring an optimized **O(1) hashed autocomplete** lookup instead of the original linear `strcmp` loop. The design extends autocomplete support to command arguments and utilizes a **Look-Aside Buffer (Shadow Index Map)** to bypass linear searches. This implementation preserves a 50% load factor with minimal memory overhead via a segmented bitmap.
+- **Reworked Embedded-CLI**: A customized, low-overhead interface for live system interaction, featuring an optimized **O(1) hashed autocomplete** lookup instead of the original linear `strcmp` loop. The design extends autocomplete support to command arguments and utilizes a **Look-Aside Buffer** (Shadow Index Map) to bypass linear searches. This implementation preserves a 50% load factor with minimal memory overhead via a segmented bitmap.
 - **Dynamic Control**: Start/Stop simulations, and trigger tests directly from the console.
 - **Static Allocation**: Zero-heap design ensuring reliability for bare-metal or RTOS environments.
 
@@ -111,7 +111,7 @@ The simulation demonstrates GPIO-driven actuation of off-chip components. It man
 
 The simulation is Zero-Heap Architecture for deterministic performance in embedded environments.
 
-1. **Enable Logs**: `set log sys sim info` enable the thermal transition and regulation logs.
+1. **Enable Logs**: Use `set log sys sim info` to enable the thermal transition and regulation logs.
 2. **Launch Simulation**: Enter `system` menu and type `start.`
 3. **Monitor**: Watch `[SYS:SIM]` logs for real-time temperature telemetry, state changes, and Alarm triggers.
 4. **Filter**: Use `set log sys sim none` to silence simulation telemetry while running a driver test.

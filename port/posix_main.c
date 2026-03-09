@@ -5,7 +5,7 @@
 
 #include <stdint.h>
 
-#include "gpio_regs.h"
+#include "gpio_demo_regs.h"
 #include "gpio.h"
 #include "log.h"
 #include "log_marker.h"
