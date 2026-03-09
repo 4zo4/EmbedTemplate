@@ -86,7 +86,8 @@ and for code development, install the pre-commit hook:
 - **ASIC-Driven**: Register headers could be auto-synced from `hw/rdl/` via PeakRDL.
 
 ### SoC Test Framework (Testhub)
-- **Modular**: Decoupled test registries (groups) for **Device Tests** (Drivers) and **System Tests** (Logic). The framework allows for seamless code sharing and development of tests per IP block.
+- **Modular Architecture**: Features decoupled test registries for Device Tests (Drivers) and System Tests (Logic), enabling seamless code sharing and per-IP block development.
+- **Automated Integration**: Traditional frameworks often suffer from CI contention when merging large, centralized test suites. This framework resolves that by automating test integration; once a test set is registered, it is automatically included in the execution chain, reducing merge conflicts and manual overhead.
 
 ## Diagnostic Logging Matrix
 The SDK uses a structured logging system organized into **Domains**, **Entities**, and **Levels**. This allows for granular control over system-wide visibility.
