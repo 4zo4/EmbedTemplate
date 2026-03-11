@@ -1,5 +1,5 @@
 /**
- * @file rtos_main.c
+ * @file freertos_sim_main.c
  * @brief An RTOS-based test for a simulated GPIO-controlled thermal
  * system. This example demonstrates a realistic temperature regulation
  * scenario with a heater, cooling fans, and an over-temperature alarm using
@@ -34,6 +34,7 @@
 #include "gpio.h"
 #include "log.h"
 #include "log_marker.h"
+#include "pack.h"
 #include "utils.h"
 
 // Logging Macros for Simulation specific System-Level Messages
@@ -43,7 +44,10 @@
 #define LOG_SYS_INFO(...) LOG_ENTITY_INFO(ID_SYS(ENT_SIM), __VA_ARGS__)
 #define LOG_SYS_DEBUG(...) LOG_ENTITY_DEBUG(ID_SYS(ENT_SIM), __VA_ARGS__)
 
-// Shift the temperature range to fit into 0-255 tange (e.g., -40°C
+#define BIT(n) (1UL << (n))
+#define BIT2(n) (BIT(n) << 8)
+
+// Shift the temperature range to fit into 0-255 range (e.g., -40°C
 // becomes 0, +215°C becomes 255)
 #define SENSOR_OFFSET 40  // -40°C
 #define TEMP_TARGET 125   // Target temperature 125°C
@@ -62,20 +66,45 @@
 #define RUNAWAY_COEFF 4         // Higher = weaker runaway effect
 #define HEATER_UNIT_POWER 4000  // Heater power
 
+/* Temperature Configuration Ranges */
+#define MIN_TEMP_TARGET 50
+#define MAX_TEMP_TARGET 150
+#define MIN_TEMP_CRIT 160
+#define MAX_TEMP_CRIT 250
+#define MIN_TEMP_COOL 30
+#define MAX_TEMP_COOL 100
+#define MIN_TEMP_HYST 2
+#define MAX_TEMP_HYST 10
+
+/* PHY State Configuration Ranges */
+#define MIN_RAMP 2
+#define MAX_RAMP 20
+#define MIN_MASS 200
+#define MAX_MASS 1000
+#define MIN_COND 5000
+#define MAX_COND 15000
+#define MIN_PWR 1000
+#define MAX_PWR 8000
+#define MIN_LAT 5
+#define MAX_LAT 50
+#define MIN_AMB -10000 // -10°C
+#define MAX_AMB 40000  // 40°C
+
 // --- Simulation Physics ---
 
 typedef struct phy_state_s {
-    uint32_t ramp_time_s;       // Range: 2 to 20 sec
-    uint32_t thermal_mass;      // Range: 200 - 1000 (200 = Fast (2s), 1000 = Very Slow (25s))
-    uint32_t board_conduct;     // Range: 5000 - 15000 (Higher = Holds heat for minutes)
-    uint32_t heater_power;      // Range: 1000 - 8000
-    uint32_t sensor_latency_ms; // Range: 5-50 (ms)
+    uint16_t ramp_time_s;       // Range: 2 to 20 sec
+    uint16_t thermal_mass;      // Range: 200 - 1000 (200 = Fast (2s), 1000 = Very Slow (25s))
+    uint16_t board_conduct;     // Range: 5000 - 15000 (Higher = Holds heat for minutes)
+    uint16_t heater_power;      // Range: 1000 - 8000
+    uint16_t sensor_latency_ms; // Range: 5-50 (ms)
+    int32_t  ambient_temp_mC;   // Range: -10°C - 40°C
 } phy_state_t;
 
 typedef struct sim_state_s {
-    int32_t energy_balance;
-    int32_t net_heat_power;
-    int32_t cooling_power;
+    int16_t energy_balance;
+    int16_t net_heat_power;
+    int16_t cooling_power;
 } sim_state_t;
 
 typedef union ctrl_status_u {
@@ -109,14 +138,20 @@ typedef struct sim_ctx_s {
     sim_state_t   state;   // The Runtime state (Energy Balance)
     unit_status_t status;  // Unit status
     int32_t       temp_mC; // Current temperature
+    uint16_t      mask;    // Config mask
 } sim_ctx_t;
 
 typedef struct temp_ctrl_cfg_s {
-    uint16_t temp_target;
-    uint16_t temp_critical;
-    uint16_t temp_hysteresis;
-    uint16_t temp_cooldown;
+    uint16_t temp_target;     // Range: 50°C - 150°C
+    uint16_t temp_critical;   // Range: 160°C - 250°C
+    uint16_t temp_cooldown;   // Range: 30°C - 100°C
+    uint16_t temp_hysteresis; // Range: 2°C - 10°C
 } temp_ctrl_cfg_t;
+
+typedef struct temp_reg_cfg_s {
+    temp_ctrl_cfg_t ctrl; // Temp control config
+    uint16_t        mask; // Config mask
+} temp_reg_cfg_t;
 
 // prototypes without include file
 // Mock alarm interrupt and periodic temperature update signal from the hardware simulator to the temperature regulation
@@ -164,8 +199,8 @@ static StackType_t  idleStack[configMINIMAL_STACK_SIZE];
 static StaticTask_t timerTcb;
 static StackType_t  timerStack[configTIMER_TASK_STACK_DEPTH];
 // Simulation data
-static sim_ctx_t       sim_ctx;
-static temp_ctrl_cfg_t sim_cfg;
+static sim_ctx_t      sim_ctx;
+static temp_reg_cfg_t sim_cfg;
 
 // -- End of globals --
 
@@ -242,31 +277,39 @@ void sim_resume(void)
 
 static void temp_ctrl_cfg_init(void)
 {
-    sim_cfg = (temp_ctrl_cfg_t){
-        .temp_target = TEMP_TARGET,
-        .temp_critical = TEMP_CRITICAL,
-        .temp_hysteresis = TEMP_HYSTERESIS,
-        .temp_cooldown = TEMP_COOLDOWN,
+    // clang-format off
+    sim_cfg.ctrl = (temp_ctrl_cfg_t){
+        .temp_target     = (sim_cfg.mask & BIT2(2)) ? sim_cfg.ctrl.temp_target     : TEMP_TARGET,
+        .temp_critical   = (sim_cfg.mask & BIT2(3)) ? sim_cfg.ctrl.temp_critical   : TEMP_CRITICAL,
+        .temp_hysteresis = (sim_cfg.mask & BIT2(4)) ? sim_cfg.ctrl.temp_hysteresis : TEMP_HYSTERESIS,
+        .temp_cooldown   = (sim_cfg.mask & BIT2(5)) ? sim_cfg.ctrl.temp_cooldown   : TEMP_COOLDOWN,
     };
+    // clang-format on
 }
 
 static void reset_sim_state(bool phy)
 {
-    sim_ctx.temp_mC = AMBIENT_TEMP_MC;
+    sim_ctx.temp_mC = sim_ctx.phy.ambient_temp_mC;
 
     if (phy) {
+        // clang-format off
         sim_ctx.phy = (phy_state_t){
-            // Default ramp to reach the target temp
-            .ramp_time_s = RAMP_TIME_DEFAULT,
-            // Default provides ~10s ramp to 125C at 4000 power
-            .thermal_mass = CHIP_THERMAL_MASS,
-            // Default conductance provides slow passive heat bleed to board
-            .board_conduct = BOARD_CONDUCTANCE,
-            // Default heater strength
-            .heater_power = HEATER_UNIT_POWER,
-            // Default sensor latency
-            .sensor_latency_ms = SENSOR_LATENCY_DEFAULT,
+            .ramp_time_s       = (sim_ctx.mask & BIT(1))  ? sim_ctx.phy.ramp_time_s       : RAMP_TIME_DEFAULT,
+            .thermal_mass      = (sim_ctx.mask & BIT(2))  ? sim_ctx.phy.thermal_mass      : CHIP_THERMAL_MASS,
+            .board_conduct     = (sim_ctx.mask & BIT(3))  ? sim_ctx.phy.board_conduct     : BOARD_CONDUCTANCE,
+            .heater_power      = (sim_ctx.mask & BIT(4))  ? sim_ctx.phy.heater_power      : HEATER_UNIT_POWER,
+            .sensor_latency_ms = (sim_ctx.mask & BIT2(1)) ? sim_ctx.phy.sensor_latency_ms : SENSOR_LATENCY_DEFAULT,
+            .ambient_temp_mC   = (sim_ctx.mask & BIT2(6)) ? sim_ctx.phy.ambient_temp_mC   : AMBIENT_TEMP_MC,
         };
+        // clang-format on
+
+        if (!(sim_ctx.mask & BIT(2)) || !(sim_ctx.mask & BIT(3))) {
+            uint16_t mass = (sim_ctx.phy.heater_power * sim_ctx.phy.ramp_time_s) / 100;
+            sim_ctx.phy.thermal_mass = (mass < MIN_MASS) ? MIN_MASS : (mass > MAX_MASS ? MAX_MASS : mass);
+
+            uint16_t cond = HEATER_UNIT_POWER + (sim_ctx.phy.thermal_mass * 20);
+            sim_ctx.phy.board_conduct = (cond < MIN_COND) ? MIN_COND : (cond > MAX_COND ? MAX_COND : cond);
+        }
     }
     sim_ctx.status = (unit_status_t){
         // clang-format off
@@ -291,26 +334,139 @@ static void reset_sim_state(bool phy)
     };
 }
 
-void update_sim_phy(int target, int ramp, int power, int latency)
+int set_sim_cfg(int len, stream_t *cfg)
 {
-    if (target >= 40 || target <= 200)
-        sim_cfg.temp_target = target;
-    if (ramp >= 2 || ramp <= 20)
-        sim_ctx.phy.ramp_time_s = ramp;
-    if (power >= 500 || power <= 8000)
-        sim_ctx.phy.heater_power = power;
-    if (latency >= 1 || latency <= 100)
-        sim_ctx.phy.sensor_latency_ms = latency;
+    if (len < 1 || cfg == nullptr)
+        return -1;
 
-    sim_ctx.phy.thermal_mass = (sim_ctx.phy.heater_power * sim_ctx.phy.ramp_time_s) / 100;
+    int hdr = cfg[0].u8[0];
 
-    if (sim_ctx.phy.thermal_mass < 1)
-        sim_ctx.phy.thermal_mass = 1;
+    if (hdr & BIT(1)) {
+        uint16_t val = cfg[0].u8[1];
+        if (val >= MIN_RAMP && val <= MAX_RAMP) {
+            sim_ctx.phy.ramp_time_s = val;
+            sim_ctx.mask |= BIT(1);
+        }
+    }
+    if (hdr & BIT(2)) {
+        uint16_t val = cfg[0].u16[1];
+        if (val >= MIN_MASS && val <= MAX_MASS) {
+            sim_ctx.phy.thermal_mass = val;
+            sim_ctx.mask |= BIT(2);
+        }
+    }
+    if (hdr & BIT(3)) {
+        uint16_t val = cfg[0].u16[2];
+        if (val >= MIN_COND && val <= MAX_COND) {
+            sim_ctx.phy.board_conduct = val;
+            sim_ctx.mask |= BIT(3);
+        }
+    }
+    if (hdr & BIT(4)) {
+        uint16_t val = cfg[0].u16[3];
+        if (val >= MIN_PWR && val <= MAX_PWR) {
+            sim_ctx.phy.heater_power = val;
+            sim_ctx.mask |= BIT(4);
+        }
+    }
 
-    sim_ctx.phy.board_conduct = HEATER_UNIT_POWER + (sim_ctx.phy.thermal_mass * 20);
+    if (!(hdr & BIT(2)) && (hdr & (BIT(1) | BIT(4)))) {
+        uint16_t mass = (sim_ctx.phy.heater_power * sim_ctx.phy.ramp_time_s) / 100;
+        if (mass < MIN_MASS)
+            mass = MIN_MASS;
+        if (mass > MAX_MASS)
+            mass = MAX_MASS;
+        sim_ctx.phy.thermal_mass = mass;
+    }
+
+    if (!(hdr & BIT(3)) && (hdr & (BIT(1) | BIT(4)))) {
+        uint16_t cond = HEATER_UNIT_POWER + (sim_ctx.phy.thermal_mass * 20);
+        if (cond < MIN_COND)
+            cond = MIN_COND;
+        if (cond > MAX_COND)
+            cond = MAX_COND;
+        sim_ctx.phy.board_conduct = cond;
+    }
+
+    if (len == 1)
+        return 0;
+
+    hdr = cfg[1].u8[0];
+
+    if (hdr & BIT(1)) {
+        uint8_t val = cfg[1].u8[1];
+        if (val >= MIN_LAT && val <= MAX_LAT) {
+            sim_ctx.phy.sensor_latency_ms = val;
+            sim_ctx.mask |= BIT2(1);
+        }
+    }
+    if (hdr & BIT(2)) {
+        uint8_t val = cfg[1].u8[2];
+        if (val >= MIN_TEMP_TARGET && val <= MAX_TEMP_TARGET) {
+            sim_cfg.ctrl.temp_target = val;
+            sim_cfg.mask |= BIT2(2);
+        }
+    }
+    if (hdr & BIT(3)) {
+        uint8_t val = cfg[1].u8[3];
+        if (val >= MIN_TEMP_CRIT && val <= MAX_TEMP_CRIT) {
+            sim_cfg.ctrl.temp_critical = val;
+            sim_cfg.mask |= BIT2(3);
+        }
+    }
+    if (hdr & BIT(4)) {
+        uint8_t val = cfg[1].u8[4];
+        if (val >= MIN_TEMP_COOL && val <= MAX_TEMP_COOL) {
+            sim_cfg.ctrl.temp_cooldown = val;
+            sim_cfg.mask |= BIT2(4);
+        }
+    }
+    if (hdr & BIT(5)) {
+        uint8_t val = cfg[1].u8[5];
+        if (val >= MIN_TEMP_HYST && val <= MAX_TEMP_HYST) {
+            sim_cfg.ctrl.temp_hysteresis = val;
+            sim_cfg.mask |= BIT2(5);
+        }
+    }
+
+    if (hdr & BIT(6)) {
+        int32_t val = (int32_t)((int16_t)cfg[1].u16[3]) * 1000;
+        if (val >= MIN_AMB && val <= MAX_AMB) {
+            sim_ctx.phy.ambient_temp_mC = val;
+            sim_ctx.mask |= BIT2(6);
+        }
+    }
 
     if (sim_ctx.phy.ramp_time_s < 4 && sim_ctx.phy.sensor_latency_ms > 10)
         sim_ctx.phy.sensor_latency_ms = 10;
+
+    return 0;
+}
+
+int get_sim_cfg(int len, stream_t *cfg)
+{
+    stream_t tmp;
+
+    if (len < 2 || cfg == nullptr)
+        return -1;
+
+    tmp.u8[0] = 0xFF; // Bit 0 = 1 (Continue), Bits 1-7 = Present (7 bytes)
+    tmp.u8[1] = (uint8_t)sim_ctx.phy.ramp_time_s;
+    tmp.u16[1] = sim_ctx.phy.thermal_mass;
+    tmp.u16[2] = sim_ctx.phy.board_conduct;
+    tmp.u16[3] = sim_ctx.phy.heater_power;
+    cfg[0].all = tmp.all;
+    tmp.all = 0;
+    tmp.u8[0] = 0x7E; // Bit 0 = 0 (End), Bits 1-6 = Present (6 fields)
+    tmp.u8[1] = (uint8_t)sim_ctx.phy.sensor_latency_ms;
+    tmp.u8[2] = (uint8_t)sim_cfg.ctrl.temp_target;
+    tmp.u8[3] = (uint8_t)sim_cfg.ctrl.temp_critical;
+    tmp.u8[4] = (uint8_t)sim_cfg.ctrl.temp_cooldown;
+    tmp.u8[5] = (uint8_t)sim_cfg.ctrl.temp_hysteresis;
+    tmp.u16[3] = (int16_t)(sim_ctx.phy.ambient_temp_mC / 1000);
+    cfg[1].all = tmp.all;
+
+    return 8 + 8; // return number of bytes set
 }
 
 static void run_temperature_regulation(volatile gpio_ctrl_t *gpio)
@@ -321,74 +477,68 @@ static void run_temperature_regulation(volatile gpio_ctrl_t *gpio)
     if (temp > sim_ctx.reg.max_temp)
         sim_ctx.reg.max_temp = temp;
 
-    // Log every 128 * sensor_latency's ms
-    if ((sim_ctx.reg.time_window++ & (128 - 1)) == 0)
-        LOG_SYS_INFO("Temp: %d°C | Target: %u°C | Max: %d°C", temp, sim_cfg.temp_target, sim_ctx.reg.max_temp);
-
-    // If temperature exceeds critical threshold, turn on emergency cooling (Fan 2)
-    // regardless of alarm state
-    if (temp > sim_cfg.temp_critical) {
-        sim_ctx.reg.status.bits.is_critical = true;
-        gpio_set_out_pin(gpio, 2);   // Fan 2 (Emergency) ON
-        gpio_clear_out_pin(gpio, 0); // Force Heater OFF
+    if ((sim_ctx.reg.time_window++ & (128 - 1)) == 0) {
+        LOG_SYS_INFO("Temp: %d°C | Target: %u°C | Max: %d°C", temp, sim_cfg.ctrl.temp_target, sim_ctx.reg.max_temp);
     }
 
-    if (gpio_is_alarm(gpio) && !sim_ctx.reg.status.bits.alarm_triggered) {
-        sim_ctx.reg.status.bits.is_heating = false;
-        sim_ctx.reg.status.bits.is_cooldown = true;
-        gpio_clear_out_pin(gpio, 0); // Heater OFF
-        gpio_set_out_pin(gpio, 1);   // Fan 1 (Normal) ON
-        sim_ctx.reg.status.bits.alarm_triggered = true;
-        LOG_SYS_WARNING("Over-Temp Alarm! Temperature %d°C Forcing Safety Cooling", temp);
-        return; // An early exit
-    }
+    if (temp > sim_cfg.ctrl.temp_critical || sim_ctx.reg.status.bits.is_critical) {
+        if (!sim_ctx.reg.status.bits.is_critical) {
+            sim_ctx.reg.status.bits.is_critical = true;
+            gpio_set_out_pin(gpio, 2);   // Fan 2 ON
+            gpio_clear_out_pin(gpio, 0); // Heater OFF
+            LOG_SYS_WARNING("Temperature %d°C! Emergency Cooling", temp);
+        }
 
-    if (sim_ctx.reg.status.bits.alarm_triggered && (temp < sim_cfg.temp_target)) {
-        sim_ctx.reg.status.bits.alarm_triggered = false;
-        // Acknowledge the alarm, i.e. clear its interrupt status
-        gpio_clear_interrupt(gpio, 8); // clear HW Latch
-        // clang-format off
-        LOG_SYS_INFO("Temperature %d°C dropped below the threshold %u°C, "
-                     "starting cooldown", temp, sim_cfg.temp_target);
-        // clang-format on
-    }
-
-    if (sim_ctx.reg.status.bits.is_cooldown) {
-        if (temp >= sim_cfg.temp_cooldown) {
-            if (!sim_ctx.status.bits.is_fan1_failed)
-                gpio_set_out_pin(gpio, 1); // Ensure Fan 1 stays ON
-            return;
+        if (temp < sim_cfg.ctrl.temp_cooldown) {
+            sim_ctx.reg.status.bits.is_critical = false;
+            gpio_clear_out_pin(gpio, 2); // Fan 2 OFF
         } else {
-            sim_ctx.reg.status.bits.is_cooldown = false;
-            if (sim_ctx.reg.status.bits.is_critical) {
-                sim_ctx.reg.status.bits.is_critical = false;
-                gpio_clear_out_pin(gpio, 2); // Fan 2 OFF
-            }
-            // clang-format off
-            LOG_SYS_INFO("Temperature %d°C dropped below the threshold %u°C, "
-                         "resuming normal operation", temp, sim_cfg.temp_cooldown);
-            // clang-format on
+            return;
         }
     }
 
-    // Normal regulation logic with hysteresis to prevent flapping
-    if (temp < (sim_cfg.temp_target - sim_cfg.temp_hysteresis)) {
+    if (gpio_is_alarm(gpio) && !sim_ctx.reg.status.bits.is_cooldown) {
+        sim_ctx.reg.status.bits.is_cooldown = true;
+        LOG_SYS_WARNING("Over-Temp Alarm! Temperature %d°C Safety Cooling", temp);
+    }
+
+    if (sim_ctx.reg.status.bits.is_cooldown) {
+        if (temp < sim_cfg.ctrl.temp_cooldown) {
+            sim_ctx.reg.status.bits.is_cooldown = false;
+            // Acknowledge the alarm, i.e. clear its interrupt status
+            gpio_clear_interrupt(gpio, 8);
+            if (temp < (sim_cfg.ctrl.temp_target - sim_cfg.ctrl.temp_hysteresis)) {
+                sim_ctx.reg.status.bits.is_heating = true;
+                gpio_clear_out_pin(gpio, 1); // Fan 1 OFF
+            }
+            sim_ctx.reg.max_temp = temp; // Reset Max Temp for the next clean run
+            // clang-format off
+            LOG_SYS_INFO("Temperature %d°C dropped below the threshold %u°C, "
+                         "resuming normal operation", temp, sim_cfg.ctrl.temp_cooldown);
+            // clang-format on
+        } else {
+            if (!sim_ctx.status.bits.is_fan1_failed)
+                gpio_set_out_pin(gpio, 1); // Fan 1 ON
+            gpio_clear_out_pin(gpio, 0);   // Heater OFF
+            return;
+        }
+    }
+
+    if (temp < (sim_cfg.ctrl.temp_target - sim_cfg.ctrl.temp_hysteresis)) {
         sim_ctx.reg.status.bits.is_heating = true;
-    } else if (temp >= sim_cfg.temp_target) {
+    } else if (temp >= sim_cfg.ctrl.temp_target) {
         sim_ctx.reg.status.bits.is_heating = false;
     }
 
-    if (sim_ctx.reg.status.bits.is_heating) {
+    if (sim_ctx.reg.status.bits.is_heating && !sim_ctx.status.bits.is_heater_failed) {
         gpio_set_out_pin(gpio, 0);   // Heater ON
         gpio_clear_out_pin(gpio, 1); // Fan 1 OFF
     } else {
         gpio_clear_out_pin(gpio, 0); // Heater OFF
-        // Deadband: Only use Fan 1 if we overshot the target by 3 degrees
-        if (temp > (sim_cfg.temp_target + 3)) {
-            gpio_set_out_pin(gpio, 1);
-        } else {
-            gpio_clear_out_pin(gpio, 1);
-        }
+        if (temp > (sim_cfg.ctrl.temp_target + 3) && !sim_ctx.status.bits.is_fan1_failed)
+            gpio_set_out_pin(gpio, 1); // Fan 1 ON
+        else
+            gpio_clear_out_pin(gpio, 1); // Fan 1 OFF
     }
 }
 
@@ -474,14 +624,18 @@ void vHardwareSimTask(void *pvParameters)
         if (gpio->out.f.pin_out & 0x04 && !sim_ctx.status.bits.is_fan2_failed)
             sim_ctx.state.cooling_power += (int32_t)sim_ctx.phy.heater_power * 4; // Fan 2 is 4x stronger
 
+        // PASSIVE COOLING:
+        sim_ctx.state.cooling_power += (sim_ctx.temp_mC - sim_ctx.phy.ambient_temp_mC) / (int32_t)sim_ctx.phy.board_conduct;
+
         // APPLY PHYSICS: Resulting delta is in millidegrees per millisecond
-        sim_ctx.temp_mC += (sim_ctx.state.net_heat_power - sim_ctx.state.cooling_power) / (int32_t)sim_ctx.phy.thermal_mass;
+        sim_ctx.state.energy_balance = sim_ctx.state.net_heat_power - sim_ctx.state.cooling_power;
+        sim_ctx.temp_mC += (sim_ctx.state.energy_balance / (int32_t)sim_ctx.phy.thermal_mass);
 
         // Hard Physical Limits of the Sensor (-40°C to 215°C)
         if (sim_ctx.temp_mC > 215000)
             sim_ctx.temp_mC = 215000;
-        if (sim_ctx.temp_mC < -40000)
-            sim_ctx.temp_mC = -40000;
+        if (sim_ctx.temp_mC < sim_ctx.phy.ambient_temp_mC)
+            sim_ctx.temp_mC = sim_ctx.phy.ambient_temp_mC;
 
         // Convert millidegrees to 8-bit integer
         int32_t temp = (sim_ctx.temp_mC / 1000) + SENSOR_OFFSET;
@@ -497,7 +651,7 @@ void vHardwareSimTask(void *pvParameters)
         // --- ALARM ---
         // If temperature exceeds target + hysteresis + 10°C buffer then
         // trigger the alarm and hold its irq until reset by the user
-        if (sim_ctx.temp_mC >= (1000 * ((sim_cfg.temp_target + sim_cfg.temp_hysteresis + 10)))) {
+        if (sim_ctx.temp_mC >= (1000 * ((sim_cfg.ctrl.temp_target + sim_cfg.ctrl.temp_hysteresis + 10)))) {
             bool is_enabled = (gpio->int_en.f.en & (1 << 8));
             bool is_pending = (gpio->int_sts.f.status & (1 << 8));
 
@@ -514,17 +668,14 @@ void vHardwareSimTask(void *pvParameters)
                     ms_counter = 0;
                 // Trigger the Alarm IRQ via Unix Signal (SIGIO)
                 kill(getpid(), SIGIO);
-                LOG_SYS_INFO("Over-Temp Alarm Triggered at %d°C", (sim_ctx.temp_mC / 1000));
+                LOG_SYS_DEBUG("Over-Temp Alarm Triggering at %d°C", (sim_ctx.temp_mC / 1000));
             }
         } else {
             // Temperature dropped below threshold: HW clears the input pin alarm
             gpio->in.f.alarm = 0;
         }
 
-        sim_ctx.state.energy_balance = sim_ctx.state.net_heat_power - sim_ctx.state.cooling_power;
-        sim_ctx.temp_mC += (sim_ctx.state.energy_balance / (int32_t)sim_ctx.phy.thermal_mass);
-
-        // --- SENSOR: Update Input Register every 30ms ---
+        // --- SENSOR: Update Input Register every sensor_latency ms ---
         if (ms_counter >= sim_ctx.phy.sensor_latency_ms && !done) {
             ms_counter = 0;
             kill(getpid(), SIGIO); // Yield via Unix Signal (SIGIO)

@@ -1,3 +1,13 @@
+/**
+ * @file gpio.h
+ * @brief GPIO Driver Interface
+ *      This file provides prototypes of high-level functions to interact with
+ * the GPIO controller. It provides a clean API for initializing pins, setting/clearing
+ * outputs, reading inputs, and configuring interrupts.
+ *
+ * @note This API is designed for educational purposes to demonstrate FW access
+ * to HW conceptse.
+ */
 #pragma once
 
 #ifdef __cplusplus

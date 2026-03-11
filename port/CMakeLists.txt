@@ -16,7 +16,7 @@ if(TEST)
 endif()
 
 if(RTOS)
-    set(STARTUP ${THIS_DIR}/freertos_main.c)
+    set(STARTUP ${THIS_DIR}/freertos_sim_main.c)
     list(APPEND RTOS_LIBS freertos_lib pthread rt)
 else()
     set(STARTUP ${THIS_DIR}/posix_main.c)

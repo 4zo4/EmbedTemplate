@@ -1,4 +1,3 @@
-
 /**
  * @file cli_system.c
  * @brief CLI System Runner
@@ -6,6 +5,7 @@
  */
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "block_id.h"
@@ -13,6 +13,7 @@
 #include "embedded_cli.h"
 #include "log.h"
 #include "log_marker.h"
+#include "pack.h"
 #include "utils.h"
 
 // prototypes without include file
@@ -24,6 +25,8 @@ void sim_start(void);
 void sim_suspend(void);
 bool sim_pause(void);
 void sim_resume(void);
+int  set_sim_cfg(int len, stream_t *cfg);
+int  get_sim_cfg(int len, stream_t *cfg);
 
 const char *entity_name(uint8_t entity);
 const char *domain_name(uint8_t domain);
@@ -163,14 +166,27 @@ void show_config(EmbeddedCli *cli)
     embeddedCliPrint(cli, msg);
 }
 
-void show_config_long(EmbeddedCli *cli)
+void show_config_sim(EmbeddedCli *cli)
 {
+    stream_t pkt[2];
+
+    get_sim_cfg(2, pkt);
+
+    char msg[256] = "Simulation config:";
+
     // clang-format off
-    embeddedCliPrint(cli, "A long configuration to test cli and again ... \r\n"
-                          "a long configuration to test cli and again ... \r\n"
-                          "a long configuration to test cli and again ... \r\n"
-                          "a long configuration to test cli ...");
+    snprintf(msg + 18, sizeof(msg) - 18,
+        "\r\n Thermal Mass: %u J/°C, Conductance: %u mW/°C, Heater Power: %u mW"
+        "\r\n Ambient Temp: %d°C, Ramp Time: %u sec, Sensor latency: %u ms"
+        "\r\n Target Temp: %u°C, Critical Temp: %u°C"
+        "\r\n Cooldown Temp: %u°C, Hysteresis: %u°C",
+        pkt[0].u16[1], pkt[0].u16[2], pkt[0].u16[3], // Mass, Conduct, Power
+        (int16_t)pkt[1].u16[3], pkt[0].u8[1], pkt[1].u8[1], // Amb Temp, Ramp, Latency
+        pkt[1].u8[2],  pkt[1].u8[3],                 // Target, Critical Temp
+        pkt[1].u8[4],  pkt[1].u8[5]);                // Cooldown, Hysteresis
     // clang-format on
+
+    embeddedCliPrint(cli, msg);
 }
 
 void show_config_short(EmbeddedCli *cli)
@@ -259,7 +275,7 @@ void show_log_levels(EmbeddedCli *cli)
  */
 static const char  *compos_1[] = {"stats", "config", "version", "domains", "entities", "levels", nullptr}; // 4 show
 static const char  *compo_1_1[] = {"log", "sys", "task", nullptr};                                         // 4 stats
-static const char  *compo_1_2[] = {"", "short", "long", "log", nullptr};                                   // 4 config
+static const char  *compo_1_2[] = {"", "short", "sim", "log", nullptr};                                    // 4 config
 static const char  *single[] = {nullptr};
 static const char **compos[] = {compos_1, compo_1_1, compo_1_2, single, single, single, single};
 /*
@@ -280,7 +296,7 @@ static void (*shaw_action[])(EmbeddedCli *cli) = {
 
     show_config,       // show config
     show_config_short, // show config short
-    show_config_long,  // show config long
+    show_config_sim,   // show config simulatiom
     show_config_log,   // show config
 
     show_version,    // show version
@@ -623,15 +639,65 @@ void cli_log_cmd_init(void)
     }
 }
 
-void on_set_log_command(EmbeddedCli *cli, char *args, void *context)
+void on_set_sim_command(EmbeddedCli *cli, char *args, int count)
 {
-    if (embeddedCliGetTokenCount(args) != 4) {
-        embeddedCliPrint(cli, "Usage: set log <domain> <entity> <level>");
+    const char *arg;
+    bool        help = false;
+
+    if (count < 2 || count > 6)
+        help = true;
+
+    if (!help)
+        arg = embeddedCliGetToken(args, 2);
+    if (!strcmp(arg, "?"))
+        help = true;
+
+    if (help) {
+        embeddedCliPrint(cli, "Usage: set sim <ramp> <mass> <cond> <power> <ambient>");
         return;
     }
-    const char *log = embeddedCliGetToken(args, 1);
-    if (strcmp(log, "log") != 0) {
-        embeddedCliPrint(cli, "[ERROR] Invalid selection");
+
+    uint8_t  hdr = 0;
+    uint16_t val;
+    stream_t pkt[2];
+
+    val = (uint16_t)atoi(arg);
+    if (val) {
+        pkt[0].u8[1] = (uint8_t)val;
+        hdr |= (1 << 1);
+    }
+
+    for (int i = 1; i < 4 && (i + 2 <= count); i++) {
+        arg = embeddedCliGetToken(args, i + 2);
+        val = (uint16_t)atoi(arg);
+        if (val) {
+            pkt[0].u16[i] = val;
+            hdr |= (1 << (i + 1));
+        }
+    }
+
+    if (count == 6) {
+        arg = embeddedCliGetToken(args, 6);
+        val = (uint16_t)atoi(arg);
+        pkt[1].u16[3] = val;
+        hdr |= (1 << 0); // add continue
+    }
+
+    pkt[0].u8[0] = hdr;
+
+    if (count == 6) {
+        hdr = (1 << 6); // mark pkt[1].u16[3] present
+        pkt[1].u8[0] = hdr;
+        set_sim_cfg(2, pkt);
+    } else {
+        set_sim_cfg(1, pkt);
+    }
+}
+
+void on_set_log_command(EmbeddedCli *cli, char *args, int count)
+{
+    if (count != 4) {
+        embeddedCliPrint(cli, "Usage: set log <domain> <entity> <level>");
         return;
     }
     const char *dom = embeddedCliGetToken(args, 2);
@@ -670,6 +736,25 @@ void on_set_log_command(EmbeddedCli *cli, char *args, void *context)
     embeddedCliPrint(cli, "Log level set");
 }
 
+void on_set_command(EmbeddedCli *cli, char *args, void *context)
+{
+    int         count = (args == nullptr) ? 0 : embeddedCliGetTokenCount(args);
+    const char *arg = embeddedCliGetToken(args, 1);
+
+    bool log = !strcmp(arg, "log");
+    bool sim = !strcmp(arg, "sim");
+
+    if (!log && !sim) {
+        embeddedCliPrint(cli, "[ERROR] Invalid selection");
+        return;
+    }
+
+    if (log)
+        on_set_log_command(cli, args, count);
+    if (sim)
+        on_set_sim_command(cli, args, count);
+}
+
 void set_system_commands(EmbeddedCli *cli)
 {
     embeddedCliAddBinding(
@@ -694,9 +779,9 @@ void set_system_commands(EmbeddedCli *cli)
         cli,
         (CliCommandBinding){
             .name = "set",
-            .help = "Set log level",
+            .help = "Set value",
             .tokenizeArgs = true,
-            .binding = on_set_log_command, // on set command
+            .binding = on_set_command, // on set command
         }
     );
 #ifdef ENABLE_RTOS
