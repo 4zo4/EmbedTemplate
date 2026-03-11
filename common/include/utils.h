@@ -2,6 +2,9 @@
 
 #define ALIGN_UP(n, align) (((n) + (align) - 1) & ~((align) - 1))
 
+#define BIT(n) (1UL << (n))
+#define BIT2(n) (BIT(n) << 8)
+
 #define MIN2(a, b) ((a) < (b) ? (a) : (b))
 #define MAX2(a, b) ((a) > (b) ? (a) : (b))
 

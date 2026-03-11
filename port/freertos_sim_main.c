@@ -44,9 +44,6 @@
 #define LOG_SYS_INFO(...) LOG_ENTITY_INFO(ID_SYS(ENT_SIM), __VA_ARGS__)
 #define LOG_SYS_DEBUG(...) LOG_ENTITY_DEBUG(ID_SYS(ENT_SIM), __VA_ARGS__)
 
-#define BIT(n) (1UL << (n))
-#define BIT2(n) (BIT(n) << 8)
-
 // Shift the temperature range to fit into 0-255 range (e.g., -40°C
 // becomes 0, +215°C becomes 255)
 #define SENSOR_OFFSET 40  // -40°C
@@ -285,6 +282,20 @@ static void temp_ctrl_cfg_init(void)
         .temp_cooldown   = (sim_cfg.mask & BIT2(5)) ? sim_cfg.ctrl.temp_cooldown   : TEMP_COOLDOWN,
     };
     // clang-format on
+    sim_cfg.mask |= BIT(0); // mark it initialized
+}
+
+static void recalculate_thermal_matrix(void)
+{
+    if (!(sim_ctx.mask & BIT(2))) {
+        uint16_t mass = (sim_ctx.phy.heater_power * sim_ctx.phy.ramp_time_s) / 100;
+        sim_ctx.phy.thermal_mass = (mass < MIN_MASS) ? MIN_MASS : (mass > MAX_MASS ? MAX_MASS : mass);
+    }
+
+    if (!(sim_ctx.mask & BIT(3))) {
+        uint16_t cond = HEATER_UNIT_POWER + (sim_ctx.phy.thermal_mass * 20);
+        sim_ctx.phy.board_conduct = (cond < MIN_COND) ? MIN_COND : (cond > MAX_COND ? MAX_COND : cond);
+    }
 }
 
 static void reset_sim_state(bool phy)
@@ -302,14 +313,8 @@ static void reset_sim_state(bool phy)
             .ambient_temp_mC   = (sim_ctx.mask & BIT2(6)) ? sim_ctx.phy.ambient_temp_mC   : AMBIENT_TEMP_MC,
         };
         // clang-format on
-
-        if (!(sim_ctx.mask & BIT(2)) || !(sim_ctx.mask & BIT(3))) {
-            uint16_t mass = (sim_ctx.phy.heater_power * sim_ctx.phy.ramp_time_s) / 100;
-            sim_ctx.phy.thermal_mass = (mass < MIN_MASS) ? MIN_MASS : (mass > MAX_MASS ? MAX_MASS : mass);
-
-            uint16_t cond = HEATER_UNIT_POWER + (sim_ctx.phy.thermal_mass * 20);
-            sim_ctx.phy.board_conduct = (cond < MIN_COND) ? MIN_COND : (cond > MAX_COND ? MAX_COND : cond);
-        }
+        recalculate_thermal_matrix();
+        sim_ctx.mask |= BIT(0); // mark it initialized
     }
     sim_ctx.status = (unit_status_t){
         // clang-format off
@@ -437,33 +442,47 @@ int set_sim_cfg(int len, stream_t *cfg)
         }
     }
 
-    if (sim_ctx.phy.ramp_time_s < 4 && sim_ctx.phy.sensor_latency_ms > 10)
+    if ((sim_ctx.mask & BIT(0)) && sim_ctx.phy.ramp_time_s < 4 && sim_ctx.phy.sensor_latency_ms > 10)
         sim_ctx.phy.sensor_latency_ms = 10;
+
+    if (sim_ctx.mask & BIT(0))
+        recalculate_thermal_matrix();
 
     return 0;
 }
 
-int get_sim_cfg(int len, stream_t *cfg)
+/**
+ * @brief Retrieves simulation configuration
+ */
+int get_sim_cfg(int len, stream_t *cfg, bool cold)
 {
     stream_t tmp;
+    bool     inuse;
 
     if (len < 2 || cfg == nullptr)
         return -1;
 
+    inuse = (sim_ctx.mask & BIT(0));
+
     tmp.u8[0] = 0xFF; // Bit 0 = 1 (Continue), Bits 1-7 = Present (7 bytes)
-    tmp.u8[1] = (uint8_t)sim_ctx.phy.ramp_time_s;
-    tmp.u16[1] = sim_ctx.phy.thermal_mass;
-    tmp.u16[2] = sim_ctx.phy.board_conduct;
-    tmp.u16[3] = sim_ctx.phy.heater_power;
+    tmp.u8[1] = (cold || (!inuse && !(sim_ctx.mask & BIT(1)))) ? RAMP_TIME_DEFAULT : (uint8_t)sim_ctx.phy.ramp_time_s;
+    tmp.u16[1] = (cold || (!inuse && !(sim_ctx.mask & BIT(2)))) ? CHIP_THERMAL_MASS : sim_ctx.phy.thermal_mass;
+    tmp.u16[2] = (cold || (!inuse && !(sim_ctx.mask & BIT(3)))) ? BOARD_CONDUCTANCE : sim_ctx.phy.board_conduct;
+    tmp.u16[3] = (cold || (!inuse && !(sim_ctx.mask & BIT(4)))) ? HEATER_UNIT_POWER : sim_ctx.phy.heater_power;
+
     cfg[0].all = tmp.all;
+
+    inuse = (sim_cfg.mask & BIT(0));
+
     tmp.all = 0;
     tmp.u8[0] = 0x7E; // Bit 0 = 0 (End), Bits 1-6 = Present (6 fields)
-    tmp.u8[1] = (uint8_t)sim_ctx.phy.sensor_latency_ms;
-    tmp.u8[2] = (uint8_t)sim_cfg.ctrl.temp_target;
-    tmp.u8[3] = (uint8_t)sim_cfg.ctrl.temp_critical;
-    tmp.u8[4] = (uint8_t)sim_cfg.ctrl.temp_cooldown;
-    tmp.u8[5] = (uint8_t)sim_cfg.ctrl.temp_hysteresis;
-    tmp.u16[3] = (int16_t)(sim_ctx.phy.ambient_temp_mC / 1000);
+    tmp.u8[1] = (cold || (!inuse && !(sim_ctx.mask & BIT2(1)))) ? SENSOR_LATENCY_DEFAULT : (uint8_t)sim_ctx.phy.sensor_latency_ms;
+    tmp.u8[2] = (cold || (!inuse && !(sim_cfg.mask & BIT2(2)))) ? TEMP_TARGET : (uint8_t)sim_cfg.ctrl.temp_target;
+    tmp.u8[3] = (cold || (!inuse && !(sim_cfg.mask & BIT2(3)))) ? TEMP_CRITICAL : (uint8_t)sim_cfg.ctrl.temp_critical;
+    tmp.u8[4] = (cold || (!inuse && !(sim_cfg.mask & BIT2(4)))) ? TEMP_COOLDOWN : (uint8_t)sim_cfg.ctrl.temp_cooldown;
+    tmp.u8[5] = (cold || (!inuse && !(sim_cfg.mask & BIT2(5)))) ? TEMP_HYSTERESIS : (uint8_t)sim_cfg.ctrl.temp_hysteresis;
+    tmp.u16[3] = (int16_t)(cold || (!inuse && !(sim_ctx.mask & BIT2(6)))) ? AMBIENT_TEMP_MC / 1000 : sim_ctx.phy.ambient_temp_mC / 1000;
+
     cfg[1].all = tmp.all;
 
     return 8 + 8; // return number of bytes set

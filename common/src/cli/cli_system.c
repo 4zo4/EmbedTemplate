@@ -26,7 +26,7 @@ void sim_suspend(void);
 bool sim_pause(void);
 void sim_resume(void);
 int  set_sim_cfg(int len, stream_t *cfg);
-int  get_sim_cfg(int len, stream_t *cfg);
+int  get_sim_cfg(int len, stream_t *cfg, bool cold);
 
 const char *entity_name(uint8_t entity);
 const char *domain_name(uint8_t domain);
@@ -135,12 +135,12 @@ void on_resume(EmbeddedCli *cli, char *args, void *context)
 
 // show command
 
-void show_sys_stats(EmbeddedCli *cli)
+void show_sys_stats(EmbeddedCli *cli, char *args, int count)
 {
     embeddedCliPrint(cli, "System Statistics ...");
 }
 
-void show_log_stats(EmbeddedCli *cli)
+void show_log_stats(EmbeddedCli *cli, char *args, int count)
 {
     log_stats_t stats;
     log_get_stats(&stats);
@@ -149,28 +149,31 @@ void show_log_stats(EmbeddedCli *cli)
     embeddedCliPrint(cli, msg);
 }
 
-void show_task_stats(EmbeddedCli *cli)
+void show_task_stats(EmbeddedCli *cli, char *args, int count)
 {
     embeddedCliPrint(cli, "Task Statistics: ...");
 }
 
-void show_version(EmbeddedCli *cli)
+void show_version(EmbeddedCli *cli, char *args, int count)
 {
     embeddedCliPrint(cli, "Version ...");
 }
 
-void show_config(EmbeddedCli *cli)
+void show_config(EmbeddedCli *cli, char *args, int count)
 {
     char msg[64] = "Config:\r\n";
     snprintf(msg + 9, sizeof(msg) - 9, " CLI binding count %u", embeddedCliGetBindingsCount(cli));
     embeddedCliPrint(cli, msg);
 }
 
-void show_config_sim(EmbeddedCli *cli)
+void show_config_sim(EmbeddedCli *cli, char *args, int count)
 {
     stream_t pkt[2];
 
-    get_sim_cfg(2, pkt);
+    const char *opt = (count == 3) ? embeddedCliGetToken(args, 3) : nullptr;
+    bool        cold = (opt && strcmp(opt, "default") == 0);
+
+    get_sim_cfg(2, pkt, cold);
 
     char msg[256] = "Simulation config:";
 
@@ -189,12 +192,12 @@ void show_config_sim(EmbeddedCli *cli)
     embeddedCliPrint(cli, msg);
 }
 
-void show_config_short(EmbeddedCli *cli)
+void show_config_short(EmbeddedCli *cli, char *args, int count)
 {
     embeddedCliPrint(cli, "Short config");
 }
 
-void show_config_log(EmbeddedCli *cli)
+void show_config_log(EmbeddedCli *cli, char *args, int count)
 {
     int             n = 12; // initial size of msg
     alignas(8) char msg[256 + 8] = "Log config: ";
@@ -207,9 +210,10 @@ void show_config_log(EmbeddedCli *cli)
             if (level) {
                 if (!enabled)
                     enabled = true;
-                int m = snprintf(
-                    tmp, 64, "\r\n [%s%s%s] %s", domain_name(did), eid ? ":" : "", entity_name(eid), level_name(level)
-                );
+                // clang-format off
+                int m = snprintf(tmp, 64, "\r\n [%s%s%s] %s", domain_name(did), eid ? ":" : "",
+                                 entity_name(eid), level_name(level));
+                // clang-format on
                 if (n + m < 256) {
                     memcpy(msg + n, tmp, ALIGN_UP(m, 8));
                     n += m;
@@ -230,7 +234,7 @@ void show_config_log(EmbeddedCli *cli)
         embeddedCliPrint(cli, "No logs enabled");
 }
 
-void show_domains(EmbeddedCli *cli)
+void show_domains(EmbeddedCli *cli, char *args, int count)
 {
     char msg[128];
 
@@ -242,7 +246,7 @@ void show_domains(EmbeddedCli *cli)
     embeddedCliPrint(cli, msg);
 }
 
-void show_entities(EmbeddedCli *cli)
+void show_entities(EmbeddedCli *cli, char *args, int count)
 {
     char msg[128];
 
@@ -253,7 +257,7 @@ void show_entities(EmbeddedCli *cli)
     }
     embeddedCliPrint(cli, msg);
 }
-void show_log_levels(EmbeddedCli *cli)
+void show_log_levels(EmbeddedCli *cli, char *args, int count)
 {
     char msg[128];
 
@@ -288,8 +292,9 @@ static const char **compos[] = {compos_1, compo_1_1, compo_1_2, single, single, 
  * 2	config	        3	            3	            0 (prev offset) + 3 (stats count)
  * 3	version	        1	            6	            3 (prev offset) + 3
  */
-static const uint8_t action_idx[] = {0, 0, 3, 7, 8, 9, 10}; // update as needed
-static void (*shaw_action[])(EmbeddedCli *cli) = {
+static const uint8_t  action_idx[] = {0, 0, 3, 7, 8, 9, 10}; // update as needed
+static const uint32_t allow_extra_args = BIT(3) | BIT(5);
+static void (*shaw_action[])(EmbeddedCli *cli, char *args, int count) = {
     show_log_stats,  // show stats log
     show_sys_stats,  // show stats sys
     show_task_stats, // show stats task
@@ -297,7 +302,7 @@ static void (*shaw_action[])(EmbeddedCli *cli) = {
     show_config,       // show config
     show_config_short, // show config short
     show_config_sim,   // show config simulatiom
-    show_config_log,   // show config
+    show_config_log,   // show config log
 
     show_version,    // show version
     show_domains,    // show domains
@@ -424,6 +429,21 @@ void on_show_completion(EmbeddedCli *cli, const char *token, uint8_t pos)
     }
 }
 
+/**
+ * @brief Show command dispatch
+ *
+ * Implements a two-level offset-mapped tree for command routing
+ *
+ * 1. Level 1: Matches the first argument against compos_1 to find the primary
+ *    group (e.g., "stats", "config").
+ * 2. Level 2: Matches the second argument against sub-command arrays
+ *    to find the specific leaf command.
+ * 3. Mapping: Uses 'action_idx' as a cumulative offset table to resolve the 2D
+ *    command path into a 1D index for the 'shaw_action' function pointer array
+ * 4. Extensibility: Supports optional "extra arguments" beyond the 2nd level
+ *    by checking the 'allow_extra_args' bitmap before dispatching the full
+ *    context to the leaf function
+ */
 void on_show_command(EmbeddedCli *cli, char *args, void *context)
 {
     bool help = false;
@@ -462,8 +482,9 @@ void on_show_command(EmbeddedCli *cli, char *args, void *context)
     const char **sub_options = compos[idx + 1];
     int          act_idx = action_idx[idx + 1];
     int          max_args = (sub_options == nullptr || sub_options[0] == nullptr) ? 1 : 2;
+    bool         use_extra_args = (allow_extra_args & BIT(act_idx));
 
-    if (!help && count > max_args) {
+    if (!help && !use_extra_args && count > max_args) {
         embeddedCliPrint(cli, "[ERROR] Too many arguments");
         snprintf(msg, sizeof(msg), "show %s", arg1);
         do_help(cli, sub_options, true, msg);
@@ -476,7 +497,7 @@ void on_show_command(EmbeddedCli *cli, char *args, void *context)
             do_help(cli, nullptr, false, msg);
         } else {
             if (shaw_action[act_idx]) {
-                shaw_action[act_idx](cli);
+                shaw_action[act_idx](cli, args, count);
             }
         }
         return;
@@ -489,7 +510,7 @@ void on_show_command(EmbeddedCli *cli, char *args, void *context)
 
         if (arg2 == nullptr && use_base) {
             if (shaw_action[act_idx])
-                shaw_action[act_idx](cli);
+                shaw_action[act_idx](cli, args, count);
         } else {
             snprintf(msg, sizeof(msg), "show %s", arg1);
             do_help(cli, sub_options, !help, msg);
@@ -506,15 +527,24 @@ void on_show_command(EmbeddedCli *cli, char *args, void *context)
     }
 
     if (idx != -1) {
+        act_idx = act_idx + idx;
+        use_extra_args = (allow_extra_args & BIT(act_idx));
         const char *arg3 = (count >= 3) ? embeddedCliGetToken(args, 3) : nullptr;
+
         if (arg3 && strcmp(arg3, "?") == 0) {
-            snprintf(msg, sizeof(msg), "show %s %s", arg1, arg2);
+            const char *opt = use_extra_args ? " [options]" : "";
+            snprintf(msg, sizeof(msg), "show %s %s%s", arg1, arg2, opt);
             do_help(cli, nullptr, false, msg);
             return;
         }
-        act_idx = act_idx + idx;
+
+        if (!use_extra_args && count >= 3) {
+            embeddedCliPrint(cli, "[ERROR] Too many arguments");
+            return;
+        }
+
         if (shaw_action[act_idx])
-            shaw_action[act_idx](cli);
+            shaw_action[act_idx](cli, args, count);
     } else {
         embeddedCliPrint(cli, invalid);
     }
@@ -642,18 +672,36 @@ void cli_log_cmd_init(void)
 void on_set_sim_command(EmbeddedCli *cli, char *args, int count)
 {
     const char *arg;
+    bool        phy = false;
+    bool        temp = false;
     bool        help = false;
 
-    if (count < 2 || count > 6)
+    if (count < 3)
         help = true;
 
-    if (!help)
+    if (!help) {
         arg = embeddedCliGetToken(args, 2);
-    if (!strcmp(arg, "?"))
-        help = true;
+        if (strcmp(arg, "phy") == 0)
+            phy = true;
+        else if (strcmp(arg, "temp") == 0)
+            temp = true;
 
+        arg = embeddedCliGetToken(args, 3);
+        if (strcmp(arg, "?") == 0)
+            help = true;
+
+        if ((phy || temp) && count > 7)
+            help = true;
+    }
     if (help) {
-        embeddedCliPrint(cli, "Usage: set sim <ramp> <mass> <cond> <power> <ambient>");
+        if (count < 3)
+            embeddedCliPrint(cli, "Usage: set sim temp [?] <numeric args> or set sim phy [?] <numeric args>");
+        else if (temp)
+            embeddedCliPrint(cli, "Usage: set sim temp [?] <latency> <target> <critical> <hyster> <cooldown>");
+        else if (phy)
+            embeddedCliPrint(cli, "Usage: set sim phy [?] <ramp> <mass> <cond> <power> <ambient>");
+        else
+            embeddedCliPrint(cli, "[ERROR] Invalid selection");
         return;
     }
 
@@ -661,42 +709,71 @@ void on_set_sim_command(EmbeddedCli *cli, char *args, int count)
     uint16_t val;
     stream_t pkt[2];
 
+    if (temp) {
+        for (int i = 0; i < 5 && (i + 3 <= count); i++) {
+            arg = embeddedCliGetToken(args, i + 3);
+            val = (uint16_t)atoi(arg);
+            if (val) {
+                pkt[1].u8[i + 1] = val;
+                hdr |= BIT(i + 1);
+            }
+        }
+        pkt[0].u8[0] = BIT(0); // add continue BIT(0)
+        pkt[1].u8[0] = hdr;
+        set_sim_cfg(2, pkt);
+        embeddedCliPrint(cli, "Sim config set");
+        return;
+    }
+
+    arg = embeddedCliGetToken(args, 3);
     val = (uint16_t)atoi(arg);
     if (val) {
         pkt[0].u8[1] = (uint8_t)val;
-        hdr |= (1 << 1);
+        hdr |= BIT(1);
     }
 
-    for (int i = 1; i < 4 && (i + 2 <= count); i++) {
-        arg = embeddedCliGetToken(args, i + 2);
+    for (int i = 1; i < 6 && (i + 3 <= count); i++) {
+        arg = embeddedCliGetToken(args, i + 3);
         val = (uint16_t)atoi(arg);
         if (val) {
             pkt[0].u16[i] = val;
-            hdr |= (1 << (i + 1));
+            hdr |= BIT(i + 1);
         }
     }
 
-    if (count == 6) {
-        arg = embeddedCliGetToken(args, 6);
+    if (count == 7) {
+        arg = embeddedCliGetToken(args, 7);
         val = (uint16_t)atoi(arg);
         pkt[1].u16[3] = val;
-        hdr |= (1 << 0); // add continue
+        hdr |= BIT(0); // add continue BIT(0)
     }
 
     pkt[0].u8[0] = hdr;
 
-    if (count == 6) {
-        hdr = (1 << 6); // mark pkt[1].u16[3] present
+    if (count == 7) {
+        hdr = BIT(6); // mark pkt[1].u16[3] field present
         pkt[1].u8[0] = hdr;
         set_sim_cfg(2, pkt);
     } else {
         set_sim_cfg(1, pkt);
     }
+
+    embeddedCliPrint(cli, "Sim config set");
 }
 
 void on_set_log_command(EmbeddedCli *cli, char *args, int count)
 {
-    if (count != 4) {
+    bool help = false;
+
+    if (count == 2) {
+        const char *arg = embeddedCliGetToken(args, 2);
+        if (strcmp(arg, "?") == 0)
+            help = true;
+    } else if (count != 4) {
+        help = true;
+    }
+
+    if (help) {
         embeddedCliPrint(cli, "Usage: set log <domain> <entity> <level>");
         return;
     }
@@ -741,8 +818,8 @@ void on_set_command(EmbeddedCli *cli, char *args, void *context)
     int         count = (args == nullptr) ? 0 : embeddedCliGetTokenCount(args);
     const char *arg = embeddedCliGetToken(args, 1);
 
-    bool log = !strcmp(arg, "log");
-    bool sim = !strcmp(arg, "sim");
+    bool log = (strcmp(arg, "log") == 0);
+    bool sim = (strcmp(arg, "sim") == 0);
 
     if (!log && !sim) {
         embeddedCliPrint(cli, "[ERROR] Invalid selection");
