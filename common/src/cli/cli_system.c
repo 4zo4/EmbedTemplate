@@ -34,6 +34,20 @@ const char *level_name(uint8_t level);
 
 static uint32_t cliHash(const char *str); // refer to embedded-cli/lib/src/embedded_cli.c
 
+typedef struct cli_cmd_compo_s {
+    const char   *name;
+    const char  **level1;
+    const char ***level2;
+} cmd_comp_t;
+
+typedef struct cmd_comp_desc_s {
+    cmd_comp_t     comp;
+    const uint8_t *action_idx;
+    const uint32_t extra_args_mask;
+
+    void (**action)(EmbeddedCli *cli, char *args, int count);
+} cmd_comp_desc_t;
+
 // for name to id matching e.g., "CRITICAL" to LOG_LEVEL_CRITICAL (10)
 typedef struct {
     uint32_t hash;
@@ -269,6 +283,20 @@ void show_log_levels(EmbeddedCli *cli, char *args, int count)
     embeddedCliPrint(cli, msg);
 }
 
+static const char *single[] = {nullptr};
+
+/**
+ * @brief position strings for the set command args auto-completion
+ */
+static const char  *set_cmd_compo_1[] = {"log", "sim", nullptr};    // 4 'set' cmd
+static const char  *set_cmd_compo_1_1[] = {"", nullptr};            // 4 'log'
+static const char  *set_cmd_compo_1_2[] = {"phy", "temp", nullptr}; // 4 'sim'
+static const char **set_cmd_compos[] = {
+    set_cmd_compo_1,
+    set_cmd_compo_1_1,
+    set_cmd_compo_1_2,
+};
+
 /**
  * @brief position strings for the show command
  *  This is Two-Level Offset-Mapped Tree
@@ -277,14 +305,24 @@ void show_log_levels(EmbeddedCli *cli, char *args, int count)
  *  Vertical Scaling: At Level 2 you can add as many sub-sub-cmds as you like
  *  You can't have more then 2 levels without structural rework.
  */
-static const char  *compos_1[] = {"stats", "config", "version", "domains", "entities", "levels", nullptr}; // 4 show
-static const char  *compo_1_1[] = {"log", "sys", "task", nullptr};                                         // 4 stats
-static const char  *compo_1_2[] = {"", "short", "sim", "log", nullptr};                                    // 4 config
-static const char  *single[] = {nullptr};
-static const char **compos[] = {compos_1, compo_1_1, compo_1_2, single, single, single, single};
+static const char  *show_cmd_compo_1[] = {"stats", "config", "version", "domains", "entities", "levels", nullptr}; // 4 'show' cmd
+static const char  *show_cmd_compo_1_1[] = {"log", "sys", "task", nullptr};                                        // 4 'stats"
+static const char  *show_cmd_compo_1_2[] = {"", "short", "sim", "log", nullptr};                                   // 4 'config'
+static const char **show_cmd_compos[] = {
+    show_cmd_compo_1,
+    show_cmd_compo_1_1,
+    show_cmd_compo_1_2,
+    single,
+    single,
+    single,
+    single,
+};
+
+static const cmd_comp_t set_cmd_comp = {"set", set_cmd_compo_1, set_cmd_compos};
+
 /*
  * The action_idx table is a Cumulative Offset Map. It translates a 2D coordinate
- * into a 1D index for the shaw_action array.
+ * into a 1D index for the set_action array.
  *                  Level2
  * Index Level 1	Number of Leafs	Offset (action_idx)	Calculation
  * 0	(Root/Show)	    -	            0               Always 0
@@ -292,9 +330,9 @@ static const char **compos[] = {compos_1, compo_1_1, compo_1_2, single, single, 
  * 2	config	        3	            3	            0 (prev offset) + 3 (stats count)
  * 3	version	        1	            6	            3 (prev offset) + 3
  */
-static const uint8_t  action_idx[] = {0, 0, 3, 7, 8, 9, 10}; // update as needed
-static const uint32_t allow_extra_args = BIT(3) | BIT(5);
-static void (*shaw_action[])(EmbeddedCli *cli, char *args, int count) = {
+static const uint8_t  show_action_idx[] = {0, 0, 3, 7, 8, 9, 10}; // update as needed
+static const uint32_t show_allow_extra_args = BIT(3) | BIT(5);
+static void (*show_action[])(EmbeddedCli *cli, char *args, int count) = {
     show_log_stats,  // show stats log
     show_sys_stats,  // show stats sys
     show_task_stats, // show stats task
@@ -308,6 +346,17 @@ static void (*shaw_action[])(EmbeddedCli *cli, char *args, int count) = {
     show_domains,    // show domains
     show_entities,   // show entities
     show_log_levels, // show log levels
+};
+
+static const cmd_comp_desc_t show_cmd_desc = {
+    .comp = {
+             .name = "show",
+             .level1 = show_cmd_compo_1,
+             .level2 = show_cmd_compos,
+             },
+    .action_idx = show_action_idx,
+    .extra_args_mask = show_allow_extra_args,
+    .action = show_action
 };
 
 void do_help(EmbeddedCli *cli, const char **options, bool usage, const char *prefix)
@@ -378,7 +427,7 @@ bool do_sub_completion(EmbeddedCli *cli, const char **options, const char *token
     return false;
 }
 
-void on_show_completion(EmbeddedCli *cli, const char *token, uint8_t pos)
+void do_cmd_arg_completion(EmbeddedCli *cli, const char *token, uint8_t pos, const cmd_comp_t *comp)
 {
     uint16_t        input_len;
     const char     *input = embeddedCliGetInputString(cli, &input_len);
@@ -392,33 +441,20 @@ void on_show_completion(EmbeddedCli *cli, const char *token, uint8_t pos)
 
     bool help = (token != nullptr && strchr(token, '?') != nullptr);
 
-    char clean_token[32] = {0};
-    if (help && token) {
-        size_t len = strlen(token);
-        if (len > 1 && token[len - 1] == '?') {
-            strncpy(clean_token, token, len - 1);
-            clean_token[len - 1] = '\0';
-        }
-    } else if (token) {
-        strncpy(clean_token, token, 31);
-    }
-
     if (pos == 1) {
         if (help)
-            do_help(cli, compos_1, false, "show");
+            do_help(cli, comp->level1, false, comp->name);
         else
-            do_sub_completion(cli, compos_1, token);
+            do_sub_completion(cli, comp->level1, token);
     } else if (pos == 2) {
         const char *arg = embeddedCliGetToken(buf, 2);
 
-        for (int i = 0; compos_1[i] != nullptr; i++) {
-            const char *match = arg ? arg : clean_token;
-
-            if (strncmp(match, compos_1[i], strlen(match)) == 0) {
-                const char **sub = compos[i + 1];
+        for (int i = 0; comp->level1[i] != nullptr; i++) {
+            if (arg && strncmp(arg, comp->level1[i], strlen(arg)) == 0) {
+                const char **sub = comp->level2[i + 1];
                 if (help) {
                     char msg[48];
-                    snprintf(msg, sizeof(msg), "show %s", compos_1[i]);
+                    snprintf(msg, sizeof(msg), "%s %s", comp->name, comp->level1[i]);
                     do_help(cli, sub, false, msg);
                 } else {
                     do_sub_completion(cli, sub, token);
@@ -429,28 +465,21 @@ void on_show_completion(EmbeddedCli *cli, const char *token, uint8_t pos)
     }
 }
 
-/**
- * @brief Show command dispatch
- *
- * Implements a two-level offset-mapped tree for command routing
- *
- * 1. Level 1: Matches the first argument against compos_1 to find the primary
- *    group (e.g., "stats", "config").
- * 2. Level 2: Matches the second argument against sub-command arrays
- *    to find the specific leaf command.
- * 3. Mapping: Uses 'action_idx' as a cumulative offset table to resolve the 2D
- *    command path into a 1D index for the 'shaw_action' function pointer array
- * 4. Extensibility: Supports optional "extra arguments" beyond the 2nd level
- *    by checking the 'allow_extra_args' bitmap before dispatching the full
- *    context to the leaf function
- */
-void on_show_command(EmbeddedCli *cli, char *args, void *context)
+void set_cmd_completion(EmbeddedCli *cli, const char *token, uint8_t pos)
+{
+    do_cmd_arg_completion(cli, token, pos, &set_cmd_comp);
+}
+
+void show_cmd_completion(EmbeddedCli *cli, const char *token, uint8_t pos)
+{
+    do_cmd_arg_completion(cli, token, pos, &show_cmd_desc.comp);
+}
+
+void cmd_args_dispatch(EmbeddedCli *cli, char *args, int count, const cmd_comp_desc_t *desc)
 {
     bool help = false;
-    int  count = (args == nullptr) ? 0 : embeddedCliGetTokenCount(args);
-
     if (count == 0) {
-        do_help(cli, compos_1, true, "show");
+        do_help(cli, desc->comp.level1, true, desc->comp.name);
         return;
     }
 
@@ -459,60 +488,57 @@ void on_show_command(EmbeddedCli *cli, char *args, void *context)
         help = true;
 
     if (help && count == 1) {
-        do_help(cli, compos_1, false, "show");
+        do_help(cli, desc->comp.level1, false, desc->comp.name);
         return;
     }
 
-    const char *arg1 = embeddedCliGetToken(args, 1);
     const char *invalid = "[ERROR] Invalid selection";
-
-    int idx = -1;
-    for (int i = 0; compos_1[i] != nullptr; i++) {
-        if (strcmp(arg1, compos_1[i]) == 0) {
+    const char *arg1 = embeddedCliGetToken(args, 1);
+    int         idx = -1;
+    for (int i = 0; desc->comp.level1[i] != nullptr; i++) {
+        if (strcmp(arg1, desc->comp.level1[i]) == 0) {
             idx = i;
             break;
         }
     }
+
     if (idx == -1) {
         embeddedCliPrint(cli, invalid);
         return;
     }
 
     char         msg[48];
-    const char **sub_options = compos[idx + 1];
-    int          act_idx = action_idx[idx + 1];
+    const char  *error = "[ERROR] Too many arguments";
+    const char **sub_options = desc->comp.level2[idx + 1];
+    int          act_idx = desc->action_idx[idx + 1];
     int          max_args = (sub_options == nullptr || sub_options[0] == nullptr) ? 1 : 2;
-    bool         use_extra_args = (allow_extra_args & BIT(act_idx));
+    bool         use_extra_args = (desc->extra_args_mask & BIT(act_idx));
 
     if (!help && !use_extra_args && count > max_args) {
-        embeddedCliPrint(cli, "[ERROR] Too many arguments");
-        snprintf(msg, sizeof(msg), "show %s", arg1);
+        embeddedCliPrint(cli, error);
+        snprintf(msg, sizeof(msg), "%s %s", desc->comp.name, arg1);
         do_help(cli, sub_options, true, msg);
         return;
     }
 
     if (max_args == 1) {
         if (help) {
-            snprintf(msg, sizeof(msg), "show %s", compos_1[idx]);
+            snprintf(msg, sizeof(msg), "%s %s", desc->comp.name, desc->comp.level1[idx]);
             do_help(cli, nullptr, false, msg);
-        } else {
-            if (shaw_action[act_idx]) {
-                shaw_action[act_idx](cli, args, count);
-            }
+        } else if (desc->action[act_idx]) {
+            desc->action[act_idx](cli, args, count);
         }
         return;
     }
 
     const char *arg2 = (count >= 2) ? embeddedCliGetToken(args, 2) : nullptr;
-
     if (arg2 == nullptr || (help && strcmp(arg2, "?") == 0)) {
         bool use_base = (sub_options != nullptr && sub_options[0] != nullptr && sub_options[0][0] == '\0');
-
         if (arg2 == nullptr && use_base) {
-            if (shaw_action[act_idx])
-                shaw_action[act_idx](cli, args, count);
+            if (desc->action[act_idx])
+                desc->action[act_idx](cli, args, count);
         } else {
-            snprintf(msg, sizeof(msg), "show %s", arg1);
+            snprintf(msg, sizeof(msg), "%s %s", desc->comp.name, arg1);
             do_help(cli, sub_options, !help, msg);
         }
         return;
@@ -527,27 +553,32 @@ void on_show_command(EmbeddedCli *cli, char *args, void *context)
     }
 
     if (idx != -1) {
-        act_idx = act_idx + idx;
-        use_extra_args = (allow_extra_args & BIT(act_idx));
+        act_idx += idx;
+        use_extra_args = (desc->extra_args_mask & BIT(act_idx));
         const char *arg3 = (count >= 3) ? embeddedCliGetToken(args, 3) : nullptr;
 
         if (arg3 && strcmp(arg3, "?") == 0) {
             const char *opt = use_extra_args ? " [options]" : "";
-            snprintf(msg, sizeof(msg), "show %s %s%s", arg1, arg2, opt);
+            snprintf(msg, sizeof(msg), "%s %s %s%s", desc->comp.name, arg1, arg2, opt);
             do_help(cli, nullptr, false, msg);
             return;
         }
 
         if (!use_extra_args && count >= 3) {
-            embeddedCliPrint(cli, "[ERROR] Too many arguments");
+            embeddedCliPrint(cli, error);
             return;
         }
 
-        if (shaw_action[act_idx])
-            shaw_action[act_idx](cli, args, count);
+        if (desc->action[act_idx])
+            desc->action[act_idx](cli, args, count);
     } else {
         embeddedCliPrint(cli, invalid);
     }
+}
+
+void on_show_command(EmbeddedCli *cli, char *args, void *context)
+{
+    cmd_args_dispatch(cli, args, (args == nullptr) ? 0 : embeddedCliGetTokenCount(args), &show_cmd_desc);
 }
 
 static uint32_t cliHash(const char *str)
@@ -851,7 +882,7 @@ void set_system_commands(EmbeddedCli *cli)
             .binding = on_show_command, // on show command
         }
     );
-    embeddedCliAddCompletion("show", on_show_completion);
+    embeddedCliAddCompletion("show", show_cmd_completion);
     embeddedCliAddBinding(
         cli,
         (CliCommandBinding){
@@ -861,6 +892,7 @@ void set_system_commands(EmbeddedCli *cli)
             .binding = on_set_command, // on set command
         }
     );
+    embeddedCliAddCompletion("set", set_cmd_completion);
 #ifdef ENABLE_RTOS
     embeddedCliAddBinding(
         cli,
