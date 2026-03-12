@@ -1,6 +1,6 @@
 # EmbedTemplate
 
-A modular C/C++ SDK and project template for SoC FW development and HW testing. Featuring a FreeRTOS-based simulation example, test framework, CLI, and automated SoC register header generation.
+A modular C/C++ SDK and project template for SoC FW development and HW testing. Featuring a FreeRTOS-based thermal simulation, test framework, CLI, and automated SoC register header generation.
 
 ## Project Architecture
 
@@ -71,7 +71,7 @@ and for code development, install the pre-commit hook:
 ## Modular SDK Framework
 
 ### Bare-metal C Lib
-- **TF-A C lib Port**: Ported a limited set of bare-metal optimized TF-A standard C library APIs for use across all components, including the FreeRTOS kernel.
+- **TF-A C lib Port**: Integrated a lightweight, bare-metal optimized subset of the **ARM Trusted Firmware-A** (TF-A) standard C library for use across all components, including the FreeRTOS kernel. This port provides architecture-agnostic implementations of core APIs ensuring minimal binary footprint.
 
 ### Interactive CLI
 - **Reworked Embedded-CLI**: A customized, low-overhead interface for live system interaction, featuring an optimized **O(1) hashed autocomplete** lookup instead of the original linear `strcmp` loop. The design extends autocomplete support to command arguments and utilizes a **Look-Aside Buffer** (Shadow Index Map) to bypass linear searches. This implementation preserves a 50% load factor with minimal memory overhead via a segmented bitmap.
@@ -104,14 +104,13 @@ The provided `DEV` entities (GPIO, UART, etc.) are included as a **functional de
   - `show config log` (View current active settings)
   - `set log <domain> <entity> <level>` (Change verbosity on-the-fly)
 
-### FreeRTOS-based Thermal Simulation Example
-This project implements a high-fidelity **Process, Voltage, and Temperature (PVT)** thermal simulation. It models the high-temperature reliability testing used to qualify semiconductors for extreme environments or to accelerate aging for High-Temperature Operating Life (HTOL) estimates.
+### FreeRTOS-based Thermal Simulation
+This project implements a **Process, Voltage, and Temperature (PVT)** thermal simulation. It models the high-temperature reliability testing used to qualify semiconductors for extreme environments or to accelerate aging for High-Temperature Operating Life (HTOL) estimates.
 
 The simulation demonstrates GPIO-driven actuation of off-chip components. It manages external power for heating and high-RPM cooling fans (Fan 1 and Fan 2) through a standardized digital interface.
 
 The simulation is Zero-Heap Architecture for deterministic performance in embedded environments.
 
-1. **Enable Logs**: Use `set log sys sim info` to enable the thermal transition and regulation logs.
-2. **Launch Simulation**: Enter `system` menu and type `start.`
-3. **Monitor**: Watch `[SYS:SIM]` logs for real-time temperature telemetry, state changes, and Alarm triggers.
-4. **Filter**: Use `set log sys sim none` to silence simulation telemetry while running a driver test.
+1. **Launch Simulation**: Enter `system` menu and type `start.`
+2. **Monitor**: Watch `[SYS:SIM]` logs for real-time temperature telemetry, state changes, and Alarm triggers.
+3. **Filter**: Use `set log sys sim none` to silence simulation telemetry while running a driver test.
