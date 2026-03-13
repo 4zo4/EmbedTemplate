@@ -226,6 +226,8 @@ void signal_handler(int sig)
 const char *entity_name(uint8_t entity, bool cap)
 {
     switch (entity) {
+    case ENTITY_NONE:
+        return cap ? "" : "none";
     case ENTITY_SIM:
         return cap ? "SIM" : "sim";
     case ENTITY_CLI:

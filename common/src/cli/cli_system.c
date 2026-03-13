@@ -45,6 +45,8 @@ typedef struct cli_cmd_comp_s {
     const char     ***level2;
     const comp_opt_t *level3;
     uint16_t          size;
+
+    void (*onArgsCompletion)(EmbeddedCli *cli, const char *token, uint8_t pos);
 } cmd_comp_t;
 
 typedef struct cmd_comp_desc_s {
@@ -273,7 +275,7 @@ void show_entities(EmbeddedCli *cli, char *args, int count)
 
     int n = snprintf(msg, sizeof(msg), "Entities:");
 
-    for (int i = 1; i < MAX_ENTITY; i++) {
+    for (int i = 0; i < MAX_ENTITY; i++) {
         n += snprintf(msg + n, sizeof(msg) - n, " %s", entity_name((uint8_t)i, 1));
     }
     embeddedCliPrint(cli, msg);
@@ -291,6 +293,109 @@ void show_log_levels(EmbeddedCli *cli, char *args, int count)
     embeddedCliPrint(cli, msg);
 }
 
+void do_log_help(EmbeddedCli *cli, const char **matches, int count, uint8_t pos)
+{
+    int         n = 5; // initial size of msg
+    char        msg[128] = "use: ";
+    const char *name;
+
+    if (matches) {
+        for (int i = 0; i < count; i++) {
+            n += snprintf(msg + n, sizeof(msg) - n, "%s", matches[i]);
+            msg[n++] = '|';
+        }
+        goto done;
+    }
+
+    if (pos == 2 || pos == 3)
+        n += snprintf(msg + n, sizeof(msg) - n, "all|");
+
+    if (pos == 2) {
+        for (int i = 1; i < MAX_DOMAIN; i++) {
+            n += snprintf(msg + n, sizeof(msg) - n, "%s", domain_name((uint8_t)i, 0));
+            msg[n++] = '|';
+        }
+    } else if (pos == 3) {
+        for (int i = 0; i < MAX_ENTITY; i++) {
+            n += snprintf(msg + n, sizeof(msg) - n, "%s", entity_name((uint8_t)i, 0));
+            msg[n++] = '|';
+        }
+    } else if (pos == 4) {
+        for (int i = 0; i < NUM_LOG_LEVELS; i++) {
+            n += snprintf(msg + n, sizeof(msg) - n, "%s", level_name((uint8_t)level_id[i], 0));
+            msg[n++] = '|';
+        }
+    } else {
+        return;
+    }
+done:
+    msg[n - 1] = '\0';
+    embeddedCliPrint(cli, msg);
+}
+
+void set_log_completion(EmbeddedCli *cli, const char *token, uint8_t pos)
+{
+    const char *match = nullptr;
+    const char *matches[8];
+    size_t      len = strlen(token);
+    int         count = 0;
+
+    if (len == 0) {
+        do_log_help(cli, nullptr, 0, pos);
+        return;
+    }
+
+    bool help = (strchr(token, '?') != nullptr);
+    if (help) {
+        do_log_help(cli, nullptr, 0, pos);
+        return;
+    }
+
+    if (pos == 2 || pos == 3) {
+        if (strncmp(token, "all", len) == 0) {
+            embeddedCliCompletion(cli, "all");
+            return;
+        }
+    }
+
+    if (pos == 2) {
+        for (int did = 1; did < MAX_DOMAIN; did++) {
+            if (count == 8)
+                break;
+            match = domain_name((uint8_t)did, 0);
+            if (strncmp(token, match, len) == 0) {
+                matches[count] = match;
+                count++;
+            }
+        }
+    } else if (pos == 3) {
+        for (int eid = 0; eid < MAX_ENTITY; eid++) {
+            if (count == 8)
+                break;
+            match = entity_name(eid, 0);
+            if (strncmp(token, match, len) == 0) {
+                matches[count] = match;
+                count++;
+            }
+        }
+    } else if (pos == 4) {
+        for (int i = 0; i < NUM_LOG_LEVELS; i++) {
+            if (count == 8)
+                break;
+            match = level_name((uint8_t)level_id[i], 0);
+            if (strncmp(token, match, len) == 0) {
+                matches[count] = match;
+                count++;
+            }
+        }
+    }
+
+    if (count == 1)
+        embeddedCliCompletion(cli, matches[0]);
+    else if (count > 1)
+        do_log_help(cli, matches, count, pos);
+}
+
 static const char *single[] = {nullptr};
 
 /**
@@ -305,7 +410,7 @@ static const char **set_cmd_compos[] = {
     set_cmd_compo_1_2,
 };
 
-static const cmd_comp_t set_cmd_comp = {"set", set_cmd_compo_1, set_cmd_compos};
+static const cmd_comp_t set_cmd_comp = {"set", set_cmd_compo_1, set_cmd_compos, nullptr, 0, set_log_completion};
 
 /**
  * @brief position strings for the show command
@@ -463,12 +568,18 @@ void do_cmd_arg_completion(EmbeddedCli *cli, const char *token, uint8_t pos, con
             do_help(cli, comp->level1, false, comp->name);
         else
             do_sub_completion(cli, comp->level1, token);
+        return;
     } else if (pos == 2) {
         const char *arg = embeddedCliGetToken(buf, 2);
 
         for (int i = 0; comp->level1[i] != nullptr; i++) {
             if (arg && strncmp(arg, comp->level1[i], strlen(arg)) == 0) {
                 const char **sub = comp->level2[i + 1];
+                if (sub == nullptr || sub[0] == nullptr || sub[0][0] == '\0') {
+                    if (comp->onArgsCompletion)
+                        comp->onArgsCompletion(cli, token, pos);
+                    return;
+                }
                 if (help) {
                     char msg[48];
                     snprintf(msg, sizeof(msg), "%s %s", comp->name, comp->level1[i]);
@@ -479,12 +590,13 @@ void do_cmd_arg_completion(EmbeddedCli *cli, const char *token, uint8_t pos, con
                 return;
             }
         }
+        return;
     } else if (pos == 3) {
         const char *arg1 = embeddedCliGetToken(buf, 2);
         const char *arg2 = embeddedCliGetToken(buf, 3);
 
         if (!comp->level3 || !arg1 || !arg2)
-            return;
+            goto is_custom;
         int l1_idx = -1;
         for (int i = 0; comp->level1[i] != nullptr; i++) {
             if (strcmp(arg1, comp->level1[i]) == 0) {
@@ -516,6 +628,10 @@ void do_cmd_arg_completion(EmbeddedCli *cli, const char *token, uint8_t pos, con
             }
         }
     }
+
+is_custom:
+    if (comp->onArgsCompletion)
+        comp->onArgsCompletion(cli, token, pos);
 }
 
 void set_cmd_completion(EmbeddedCli *cli, const char *token, uint8_t pos)
@@ -747,31 +863,6 @@ static int find_name_id(const char *name, int type)
     return -1;
 }
 
-void cli_log_cmd_init(void)
-{
-    const char *name = nullptr;
-
-    memset(domain_map, MAP_EMPTY, sizeof(domain_map));
-    memset(entity_map, MAP_EMPTY, sizeof(entity_map));
-    memset(level_map, MAP_EMPTY, sizeof(level_map));
-
-    for (int did = 1; did < MAX_DOMAIN; did++) {
-        name = domain_name((uint8_t)did, 1);
-        insert_name(name, did, TYPE_DOMAIN, did - 1);
-    }
-
-    insert_name("NONE", ENTITY_NONE, TYPE_ENTITY, 0);
-    for (int eid = 1; eid < MAX_ENTITY; eid++) {
-        name = entity_name((uint8_t)eid, 1);
-        insert_name(name, eid, TYPE_ENTITY, eid);
-    }
-
-    for (int i = 0; i < NUM_LOG_LEVELS; i++) {
-        name = level_name((uint8_t)level_id[i], 1);
-        insert_name(name, level_id[i], TYPE_LOG_LEVEL, i);
-    }
-}
-
 void on_set_sim_command(EmbeddedCli *cli, char *args, int count)
 {
     const char *arg;
@@ -862,6 +953,30 @@ void on_set_sim_command(EmbeddedCli *cli, char *args, int count)
     }
 
     embeddedCliPrint(cli, "Sim config set");
+}
+
+void cli_log_cmd_init(void)
+{
+    const char *name = nullptr;
+
+    memset(domain_map, MAP_EMPTY, sizeof(domain_map));
+    memset(entity_map, MAP_EMPTY, sizeof(entity_map));
+    memset(level_map, MAP_EMPTY, sizeof(level_map));
+
+    for (int did = 1; did < MAX_DOMAIN; did++) {
+        name = domain_name((uint8_t)did, 1);
+        insert_name(name, did, TYPE_DOMAIN, did - 1);
+    }
+
+    for (int eid = 0; eid < MAX_ENTITY; eid++) {
+        name = entity_name((uint8_t)eid, 1);
+        insert_name(name, eid, TYPE_ENTITY, eid);
+    }
+
+    for (int i = 0; i < NUM_LOG_LEVELS; i++) {
+        name = level_name((uint8_t)level_id[i], 1);
+        insert_name(name, level_id[i], TYPE_LOG_LEVEL, i);
+    }
 }
 
 void on_set_log_command(EmbeddedCli *cli, char *args, int count)
