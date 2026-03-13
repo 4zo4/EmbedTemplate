@@ -28,22 +28,29 @@ void sim_resume(void);
 int  set_sim_cfg(int len, stream_t *cfg);
 int  get_sim_cfg(int len, stream_t *cfg, bool cold);
 
-const char *entity_name(uint8_t entity);
-const char *domain_name(uint8_t domain);
-const char *level_name(uint8_t level);
+const char *entity_name(uint8_t entity, bool cap);
+const char *domain_name(uint8_t domain, bool cap);
+const char *level_name(uint8_t level, bool cap);
 
 static uint32_t cliHash(const char *str); // refer to embedded-cli/lib/src/embedded_cli.c
 
-typedef struct cli_cmd_compo_s {
-    const char   *name;
-    const char  **level1;
-    const char ***level2;
+typedef struct comp_opt_s {
+    uint8_t      idx;
+    const char **opt;
+} comp_opt_t;
+
+typedef struct cli_cmd_comp_s {
+    const char       *name;
+    const char      **level1;
+    const char     ***level2;
+    const comp_opt_t *level3;
+    uint16_t          size;
 } cmd_comp_t;
 
 typedef struct cmd_comp_desc_s {
     cmd_comp_t     comp;
     const uint8_t *action_idx;
-    const uint32_t extra_args_mask;
+    const uint32_t opt_mask;
 
     void (**action)(EmbeddedCli *cli, char *args, int count);
 } cmd_comp_desc_t;
@@ -149,12 +156,12 @@ void on_resume(EmbeddedCli *cli, char *args, void *context)
 
 // show command
 
-void show_sys_stats(EmbeddedCli *cli, char *args, int count)
+void show_stats_sys(EmbeddedCli *cli, char *args, int count)
 {
     embeddedCliPrint(cli, "System Statistics ...");
 }
 
-void show_log_stats(EmbeddedCli *cli, char *args, int count)
+void show_stats_log(EmbeddedCli *cli, char *args, int count)
 {
     log_stats_t stats;
     log_get_stats(&stats);
@@ -163,7 +170,7 @@ void show_log_stats(EmbeddedCli *cli, char *args, int count)
     embeddedCliPrint(cli, msg);
 }
 
-void show_task_stats(EmbeddedCli *cli, char *args, int count)
+void show_stats_task(EmbeddedCli *cli, char *args, int count)
 {
     embeddedCliPrint(cli, "Task Statistics: ...");
 }
@@ -225,8 +232,8 @@ void show_config_log(EmbeddedCli *cli, char *args, int count)
                 if (!enabled)
                     enabled = true;
                 // clang-format off
-                int m = snprintf(tmp, 64, "\r\n [%s%s%s] %s", domain_name(did), eid ? ":" : "",
-                                 entity_name(eid), level_name(level));
+                int m = snprintf(tmp, 64, "\r\n [%s%s%s] %s", domain_name(did, 1), eid ? ":" : "",
+                                 entity_name(eid, 1), level_name(level, 1));
                 // clang-format on
                 if (n + m < 256) {
                     memcpy(msg + n, tmp, ALIGN_UP(m, 8));
@@ -255,7 +262,7 @@ void show_domains(EmbeddedCli *cli, char *args, int count)
     int n = snprintf(msg, sizeof(msg), "Domains:");
 
     for (int i = 1; i < MAX_DOMAIN; i++) {
-        n += snprintf(msg + n, sizeof(msg) - n, " %s", domain_name((uint8_t)i));
+        n += snprintf(msg + n, sizeof(msg) - n, " %s", domain_name((uint8_t)i, 1));
     }
     embeddedCliPrint(cli, msg);
 }
@@ -267,10 +274,11 @@ void show_entities(EmbeddedCli *cli, char *args, int count)
     int n = snprintf(msg, sizeof(msg), "Entities:");
 
     for (int i = 1; i < MAX_ENTITY; i++) {
-        n += snprintf(msg + n, sizeof(msg) - n, " %s", entity_name((uint8_t)i));
+        n += snprintf(msg + n, sizeof(msg) - n, " %s", entity_name((uint8_t)i, 1));
     }
     embeddedCliPrint(cli, msg);
 }
+
 void show_log_levels(EmbeddedCli *cli, char *args, int count)
 {
     char msg[128];
@@ -278,7 +286,7 @@ void show_log_levels(EmbeddedCli *cli, char *args, int count)
     int n = snprintf(msg, sizeof(msg), "Log levels:");
 
     for (int i = 0; i < NUM_LOG_LEVELS; i++) {
-        n += snprintf(msg + n, sizeof(msg) - n, " %s", level_name((uint8_t)level_id[i]));
+        n += snprintf(msg + n, sizeof(msg) - n, " %s", level_name((uint8_t)level_id[i], 1));
     }
     embeddedCliPrint(cli, msg);
 }
@@ -296,6 +304,8 @@ static const char **set_cmd_compos[] = {
     set_cmd_compo_1_1,
     set_cmd_compo_1_2,
 };
+
+static const cmd_comp_t set_cmd_comp = {"set", set_cmd_compo_1, set_cmd_compos};
 
 /**
  * @brief position strings for the show command
@@ -318,7 +328,12 @@ static const char **show_cmd_compos[] = {
     single,
 };
 
-static const cmd_comp_t set_cmd_comp = {"set", set_cmd_compo_1, set_cmd_compos};
+static const char *options_stats_log[] = {"clear", nullptr};
+static const char *options_config_sim[] = {"default", "current", nullptr};
+static comp_opt_t  show_options[] = {
+    {0, options_stats_log }, // 0: show stats log [clear]
+    {5, options_config_sim}, // 5: show config sim [default|current]
+};
 
 /*
  * The action_idx table is a Cumulative Offset Map. It translates a 2D coordinate
@@ -330,12 +345,12 @@ static const cmd_comp_t set_cmd_comp = {"set", set_cmd_compo_1, set_cmd_compos};
  * 2	config	        3	            3	            0 (prev offset) + 3 (stats count)
  * 3	version	        1	            6	            3 (prev offset) + 3
  */
-static const uint8_t  show_action_idx[] = {0, 0, 3, 7, 8, 9, 10}; // update as needed
-static const uint32_t show_allow_extra_args = BIT(3) | BIT(5);
+static const uint8_t  show_action_idx[] = {0, 0, 3, 7, 8, 9, 10};
+static const uint32_t show_allow_opt = BIT(0) | BIT(3) | BIT(5);
 static void (*show_action[])(EmbeddedCli *cli, char *args, int count) = {
-    show_log_stats,  // show stats log
-    show_sys_stats,  // show stats sys
-    show_task_stats, // show stats task
+    show_stats_log,  // show stats log
+    show_stats_sys,  // show stats sys
+    show_stats_task, // show stats task
 
     show_config,       // show config
     show_config_short, // show config short
@@ -353,10 +368,12 @@ static const cmd_comp_desc_t show_cmd_desc = {
              .name = "show",
              .level1 = show_cmd_compo_1,
              .level2 = show_cmd_compos,
+             .level3 = show_options,
+             .size = (uint16_t)(sizeof(show_options) / sizeof(comp_opt_t)),
              },
     .action_idx = show_action_idx,
-    .extra_args_mask = show_allow_extra_args,
-    .action = show_action
+    .opt_mask = show_allow_opt,
+    .action = show_action,
 };
 
 void do_help(EmbeddedCli *cli, const char **options, bool usage, const char *prefix)
@@ -427,7 +444,7 @@ bool do_sub_completion(EmbeddedCli *cli, const char **options, const char *token
     return false;
 }
 
-void do_cmd_arg_completion(EmbeddedCli *cli, const char *token, uint8_t pos, const cmd_comp_t *comp)
+void do_cmd_arg_completion(EmbeddedCli *cli, const char *token, uint8_t pos, const cmd_comp_t *comp, const uint8_t *action_idx)
 {
     uint16_t        input_len;
     const char     *input = embeddedCliGetInputString(cli, &input_len);
@@ -462,17 +479,53 @@ void do_cmd_arg_completion(EmbeddedCli *cli, const char *token, uint8_t pos, con
                 return;
             }
         }
+    } else if (pos == 3) {
+        const char *arg1 = embeddedCliGetToken(buf, 2);
+        const char *arg2 = embeddedCliGetToken(buf, 3);
+
+        if (!comp->level3 || !arg1 || !arg2)
+            return;
+        int l1_idx = -1;
+        for (int i = 0; comp->level1[i] != nullptr; i++) {
+            if (strcmp(arg1, comp->level1[i]) == 0) {
+                l1_idx = i;
+                break;
+            }
+        }
+
+        if (l1_idx != -1) {
+            const char **sub = comp->level2[l1_idx + 1];
+            int          l2_idx = -1;
+            for (int i = 0; sub[i] != nullptr; i++) {
+                if (strcmp(arg2, sub[i]) == 0) {
+                    l2_idx = i;
+                    break;
+                }
+            }
+
+            if (l2_idx != -1 && action_idx != nullptr) {
+                int act_idx = action_idx[l1_idx + 1] + l2_idx;
+                if (comp->level3) {
+                    for (int i = 0; i < comp->size; i++) {
+                        if (comp->level3[i].idx == act_idx) {
+                            do_sub_completion(cli, comp->level3[i].opt, token);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
 void set_cmd_completion(EmbeddedCli *cli, const char *token, uint8_t pos)
 {
-    do_cmd_arg_completion(cli, token, pos, &set_cmd_comp);
+    do_cmd_arg_completion(cli, token, pos, &set_cmd_comp, nullptr);
 }
 
 void show_cmd_completion(EmbeddedCli *cli, const char *token, uint8_t pos)
 {
-    do_cmd_arg_completion(cli, token, pos, &show_cmd_desc.comp);
+    do_cmd_arg_completion(cli, token, pos, &show_cmd_desc.comp, show_cmd_desc.action_idx);
 }
 
 void cmd_args_dispatch(EmbeddedCli *cli, char *args, int count, const cmd_comp_desc_t *desc)
@@ -512,9 +565,9 @@ void cmd_args_dispatch(EmbeddedCli *cli, char *args, int count, const cmd_comp_d
     const char **sub_options = desc->comp.level2[idx + 1];
     int          act_idx = desc->action_idx[idx + 1];
     int          max_args = (sub_options == nullptr || sub_options[0] == nullptr) ? 1 : 2;
-    bool         use_extra_args = (desc->extra_args_mask & BIT(act_idx));
+    bool         use_opt = (desc->opt_mask & BIT(act_idx));
 
-    if (!help && !use_extra_args && count > max_args) {
+    if (!help && !use_opt && count > max_args) {
         embeddedCliPrint(cli, error);
         snprintf(msg, sizeof(msg), "%s %s", desc->comp.name, arg1);
         do_help(cli, sub_options, true, msg);
@@ -554,17 +607,36 @@ void cmd_args_dispatch(EmbeddedCli *cli, char *args, int count, const cmd_comp_d
 
     if (idx != -1) {
         act_idx += idx;
-        use_extra_args = (desc->extra_args_mask & BIT(act_idx));
+        use_opt = (desc->opt_mask & BIT(act_idx));
         const char *arg3 = (count >= 3) ? embeddedCliGetToken(args, 3) : nullptr;
 
         if (arg3 && strcmp(arg3, "?") == 0) {
-            const char *opt = use_extra_args ? " [options]" : "";
-            snprintf(msg, sizeof(msg), "%s %s %s%s", desc->comp.name, arg1, arg2, opt);
+            char opt_buf[64] = " [options]";
+            if (use_opt && desc->comp.level3) {
+                const char **opt = nullptr;
+                for (int i = 0; i < desc->comp.size; i++) {
+                    if (desc->comp.level3[i].idx == act_idx) {
+                        opt = desc->comp.level3[i].opt;
+                        break;
+                    }
+                }
+                if (opt && opt[0] != nullptr) {
+                    opt_buf[2] = '\0';
+                    for (int i = 0; opt[i] != nullptr; i++) {
+                        if (i > 0)
+                            strcat(opt_buf, "|");
+                        strcat(opt_buf, opt[i]);
+                    }
+                    strcat(opt_buf, "]");
+                }
+            }
+
+            snprintf(msg, sizeof(msg), "%s %s %s%s", desc->comp.name, arg1, arg2, opt_buf);
             do_help(cli, nullptr, false, msg);
             return;
         }
 
-        if (!use_extra_args && count >= 3) {
+        if (!use_opt && count >= 3) {
             embeddedCliPrint(cli, error);
             return;
         }
@@ -684,18 +756,18 @@ void cli_log_cmd_init(void)
     memset(level_map, MAP_EMPTY, sizeof(level_map));
 
     for (int did = 1; did < MAX_DOMAIN; did++) {
-        name = domain_name((uint8_t)did);
+        name = domain_name((uint8_t)did, 1);
         insert_name(name, did, TYPE_DOMAIN, did - 1);
     }
 
     insert_name("NONE", ENTITY_NONE, TYPE_ENTITY, 0);
     for (int eid = 1; eid < MAX_ENTITY; eid++) {
-        name = entity_name((uint8_t)eid);
+        name = entity_name((uint8_t)eid, 1);
         insert_name(name, eid, TYPE_ENTITY, eid);
     }
 
     for (int i = 0; i < NUM_LOG_LEVELS; i++) {
-        name = level_name((uint8_t)level_id[i]);
+        name = level_name((uint8_t)level_id[i], 1);
         insert_name(name, level_id[i], TYPE_LOG_LEVEL, i);
     }
 }

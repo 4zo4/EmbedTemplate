@@ -223,57 +223,57 @@ void signal_handler(int sig)
 #endif
 }
 
-const char *entity_name(uint8_t entity)
+const char *entity_name(uint8_t entity, bool cap)
 {
     switch (entity) {
     case ENTITY_SIM:
-        return "SIM";
+        return cap ? "SIM" : "sim";
     case ENTITY_CLI:
-        return "CLI";
+        return cap ? "CLI" : "cli";
     case ENTITY_LOG:
-        return "LOG";
+        return cap ? "LOG" : "log";
     case ENTITY_GPIO:
-        return "GPIO";
+        return cap ? "GPIO" : "gpio";
     case ENTITY_SYSCTRL:
-        return "SYSCTRL";
+        return cap ? "SYSCTRL" : "sysctrl";
     case ENTITY_TIMER:
-        return "TIMER";
+        return cap ? "TIMER" : "timer";
     case ENTITY_UART:
-        return "UART";
+        return cap ? "UART" : "uart";
     default:
         return "";
     }
 }
 
-const char *domain_name(uint8_t domain)
+const char *domain_name(uint8_t domain, bool cap)
 {
     switch (domain) {
     case DOMAIN_DEV:
-        return "DEV";
+        return cap ? "DEV" : "dev";
     case DOMAIN_SYS:
-        return "SYS";
+        return cap ? "SYS" : "sys";
     case DOMAIN_TEST:
-        return "TEST";
+        return cap ? "TEST" : "test";
     default:
         return "";
     }
 }
 
-const char *level_name(uint8_t level)
+const char *level_name(uint8_t level, bool cap)
 {
     switch (level) {
     case LOG_LEVEL_NONE:
-        return "NONE";
+        return cap ? "NONE" : "none";
     case LOG_LEVEL_CRITICAL:
-        return "CRITICAL";
+        return cap ? "CRITICAL" : "critical";
     case LOG_LEVEL_ERROR:
-        return "ERROR";
+        return cap ? "ERROR" : "error";
     case LOG_LEVEL_WARNING:
-        return "WARN";
+        return cap ? "WARN" : "warn";
     case LOG_LEVEL_INFO:
-        return "INFO";
+        return cap ? "INFO" : "info";
     case LOG_LEVEL_DEBUG:
-        return "DEBUG";
+        return cap ? "DEBUG" : "debug";
     default:
         return "";
     }
@@ -301,8 +301,8 @@ void log_formatter(uint8_t domain, uint8_t entity, uint8_t level, uint64_t ts, c
     printf(TERM_TRUNCATION_SAFETY_ON TERM_CLEAR_LINE); // no-wrap for long lines + clear line
     printf("\033[2m[%03u:%02u:%02u:%02u.%06u]\033[0m", days, hour, min, sec, us);
     printf(
-        "%s[%s%s%s]\033[0m[%s] %s", color, domain_name(domain), entity ? ":" : "", entity_name(entity),
-        level_name(level), log_msg
+        "%s[%s%s%s]\033[0m[%s] %s", color, domain_name(domain, 1), entity ? ":" : "", entity_name(entity, 1),
+        level_name(level, 1), log_msg
     );
     printf(TERM_TRUNCATION_SAFETY_OFF);
     printf(TERM_SET_SCROLL_REGION(MENU_REGION_START, MENU_REGION_END));
