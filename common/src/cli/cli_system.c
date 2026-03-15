@@ -34,25 +34,35 @@ const char *level_name(uint8_t level, bool cap);
 
 static uint32_t cliHash(const char *str); // refer to embedded-cli/lib/src/embedded_cli.c
 
+typedef void (*args_comp_t)(EmbeddedCli *cli, const char *token, uint8_t pos);
+typedef struct comp_cast_s {
+    uint8_t   idx; // action index
+    uintptr_t ptr;
+} comp_cast_t;
+
 typedef struct comp_opt_s {
-    uint8_t      idx;
-    const char **opt;
+    uint8_t      idx; // action index
+    const char **opt; // option names
 } comp_opt_t;
 
-typedef struct cli_cmd_comp_s {
-    const char       *name;
-    const char      **level1;
-    const char     ***level2;
-    const comp_opt_t *level3;
-    uint16_t          size;
+typedef struct comp_spec_s {
+    uint8_t idx; // specs index
+    void (*args_comp)(EmbeddedCli *cli, const char *token, uint8_t pos);
+} comp_spec_t;
 
-    void (*onArgsCompletion)(EmbeddedCli *cli, const char *token, uint8_t pos);
+typedef struct cmd_comp_s {
+    const char       *name;     // command name
+    const char      **level1;   // Level 1 sub-commands
+    const char     ***level2;   // Level 2 sub-command's args
+    const comp_opt_t *level3;   // Level 3 options
+    uint16_t          opt_size; // option table size
+    uint16_t          spec_idx; // index into specs
 } cmd_comp_t;
 
 typedef struct cmd_comp_desc_s {
     cmd_comp_t     comp;
-    const uint8_t *action_idx;
-    const uint32_t opt_mask;
+    const uint8_t *act_idx;  // command's action index table
+    const uint32_t opt_mask; // options enabled mask
 
     void (**action)(EmbeddedCli *cli, char *args, int count);
 } cmd_comp_desc_t;
@@ -259,38 +269,46 @@ void show_config_log(EmbeddedCli *cli, char *args, int count)
 
 void show_domains(EmbeddedCli *cli, char *args, int count)
 {
-    char msg[128];
+    char msg[128] = "Domains:";
+    int  n = 8;
 
-    int n = snprintf(msg, sizeof(msg), "Domains:");
-
-    for (int i = 1; i < MAX_DOMAIN; i++) {
-        n += snprintf(msg + n, sizeof(msg) - n, " %s", domain_name((uint8_t)i, 1));
+    for (int did = 1; did < MAX_DOMAIN; did++) {
+        n += snprintf(msg + n, sizeof(msg) - n, " %s", domain_name((uint8_t)did, 1));
     }
     embeddedCliPrint(cli, msg);
 }
 
 void show_entities(EmbeddedCli *cli, char *args, int count)
 {
-    char msg[128];
+    char msg[128] = "Entities:";
+    int  n = 9;
 
-    int n = snprintf(msg, sizeof(msg), "Entities:");
-
-    for (int i = 0; i < MAX_ENTITY; i++) {
-        n += snprintf(msg + n, sizeof(msg) - n, " %s", entity_name((uint8_t)i, 1));
+    for (int eid = 1; eid < MAX_ENTITY; eid++) {
+        n += snprintf(msg + n, sizeof(msg) - n, " %s", entity_name((uint8_t)eid, 1));
     }
     embeddedCliPrint(cli, msg);
 }
 
 void show_log_levels(EmbeddedCli *cli, char *args, int count)
 {
-    char msg[128];
-
-    int n = snprintf(msg, sizeof(msg), "Log levels:");
+    char msg[128] = "Log levels:";
+    int  n = 11;
 
     for (int i = 0; i < NUM_LOG_LEVELS; i++) {
         n += snprintf(msg + n, sizeof(msg) - n, " %s", level_name((uint8_t)level_id[i], 1));
     }
     embeddedCliPrint(cli, msg);
+}
+
+static uintptr_t find_by_index(const void *table, uint16_t size, uint16_t idx)
+{
+    const comp_cast_t *cast_tbl = (const comp_cast_t *)table;
+
+    for (uint16_t i = 0; i < size; i++) {
+        if (cast_tbl[i].idx == idx)
+            return cast_tbl[i].ptr;
+    }
+    return 0;
 }
 
 void do_log_help(EmbeddedCli *cli, const char **matches, int count, uint8_t pos)
@@ -396,76 +414,109 @@ void set_log_completion(EmbeddedCli *cli, const char *token, uint8_t pos)
         do_log_help(cli, matches, count, pos);
 }
 
+// -- Globals --
+
+/**
+ * @brief Global table for specialized argument completion logic.
+ * Index 0 is reserved for 'no-op' (static data default).
+ * Match via cmd_comp_t.spec_idx.
+ */
+#define SPECS_SIZE (sizeof(specs) / sizeof(comp_spec_t))
+static const comp_spec_t specs[] = {
+    {0, nullptr           }, // Default: No special handling
+    {1, set_log_completion}, // Custom logic: 'set log <domain> <entity> <level>'
+};
+
 static const char *single[] = {nullptr};
 
 /**
- * @brief position strings for the set command args auto-completion
+ * @brief Auto-completion tree for the 'set' command.
  */
-static const char  *set_cmd_compo_1[] = {"log", "sim", nullptr};    // 4 'set' cmd
-static const char  *set_cmd_compo_1_1[] = {"", nullptr};            // 4 'log'
-static const char  *set_cmd_compo_1_2[] = {"phy", "temp", nullptr}; // 4 'sim'
+static const char  *set_cmd_compo_1[] = {"log", "sim", "sis", nullptr}; // Level 1: Sub-commands
+static const char  *set_cmd_compo_1_1[] = {"", nullptr};                // Level 2: 'log' (handled by spec_idx 1)
+static const char  *set_cmd_compo_1_2[] = {"phy", "temp", nullptr};     // Level 2: 'sim' options 'set sim phy' | 'set sim temp'
 static const char **set_cmd_compos[] = {
-    set_cmd_compo_1,
-    set_cmd_compo_1_1,
-    set_cmd_compo_1_2,
+    set_cmd_compo_1,   // Root of the 'set' command
+    set_cmd_compo_1_1, // 'set log' path
+    set_cmd_compo_1_2, // 'set sim' path
+    single,
 };
 
-static const cmd_comp_t set_cmd_comp = {"set", set_cmd_compo_1, set_cmd_compos, nullptr, 0, set_log_completion};
+static const cmd_comp_t set_cmd_comp = {
+    .name = "set",
+    .level1 = set_cmd_compo_1,
+    .level2 = set_cmd_compos,
+    .level3 = nullptr,
+    .opt_size = 0,
+    .spec_idx = 1 // Points to set_log_completion in 'specs' table
+};
 
 /**
- * @brief position strings for the show command
- *  This is Two-Level Offset-Mapped Tree
- *  The Constraints: strictly limited to 2 levels
- *  Horizontal Scaling: At Level 1 you can add as many sub-cmds to compos_1 as you like
- *  Vertical Scaling: At Level 2 you can add as many sub-sub-cmds as you like
- *  You can't have more then 2 levels without structural rework.
+ * @brief Auto-completion tree for the 'show' command.
+ * Structure: Two-Level Offset-Mapped Tree.
+ * - Horizontal: Add sub-commands to level1.
+ * - Vertical: Level 2 provides arguments for Level 1 sub-commands.
+ * - Note: Level 3 (options) and Specs are indexed via action_idx calculation.
  */
-static const char  *show_cmd_compo_1[] = {"stats", "config", "version", "domains", "entities", "levels", nullptr}; // 4 'show' cmd
-static const char  *show_cmd_compo_1_1[] = {"log", "sys", "task", nullptr};                                        // 4 'stats"
-static const char  *show_cmd_compo_1_2[] = {"", "short", "sim", "log", nullptr};                                   // 4 'config'
+static const char  *show_cmd_compo_1[] = {"stats", "config", "version", "domains", "entities", "levels", nullptr};
+static const char  *show_cmd_compo_1_1[] = {"log", "sys", "task", nullptr};      // 'show stats ...'
+static const char  *show_cmd_compo_1_2[] = {"", "short", "sim", "log", nullptr}; // 'show config ...'
 static const char **show_cmd_compos[] = {
-    show_cmd_compo_1,
-    show_cmd_compo_1_1,
-    show_cmd_compo_1_2,
-    single,
-    single,
-    single,
-    single,
+    show_cmd_compo_1,   // Root Level 1 options for the 'show' command
+    show_cmd_compo_1_1, // Sub-args for 'stats'
+    show_cmd_compo_1_2, // Sub-args for 'config'
+    single,             // No sub-args for 'version'
+    single,             // No sub-args for 'domains'
+    single,             // No sub-args for 'entities'
+    single,             // No sub-args for 'levels'
 };
 
+/**
+ * @brief Level 3 static options mapping.
+ * Matches 1D action index to a list of optional terminal arguments.
+ */
 static const char *options_stats_log[] = {"clear", nullptr};
 static const char *options_config_sim[] = {"default", "current", nullptr};
 static comp_opt_t  show_options[] = {
-    {0, options_stats_log }, // 0: show stats log [clear]
-    {5, options_config_sim}, // 5: show config sim [default|current]
+    {0, options_stats_log }, // Maps to 'show stats log [clear]'
+    {5, options_config_sim}, // Maps to 'show config sim [default|current]'
 };
 
-/*
- * The action_idx table is a Cumulative Offset Map. It translates a 2D coordinate
- * into a 1D index for the set_action array.
- *                  Level2
- * Index Level 1	Number of Leafs	Offset (action_idx)	Calculation
- * 0	(Root/Show)	    -	            0               Always 0
- * 1	stats       	3	            0               Starts at 0
- * 2	config	        3	            3	            0 (prev offset) + 3 (stats count)
- * 3	version	        1	            6	            3 (prev offset) + 3
+/**
+ * @brief Cumulative Offset Map for 'show' command hierarchy.
+ * Translates (Level 1 Index, Level 2 Index) -> 1D Linear Action Index.
+ *
+ * L1 Index | Sub-Cmd  | L2 Count | Action Offset | Range
+ * ---------|----------|----------|---------------|-------
+ * 1        | stats    | 3        | 0             | 0-2
+ * 2        | config   | 4        | 3             | 3-6
+ * 3        | version  | 1        | 7             | 7
+ * 4        | domains  | 1        | 8             | 8
+ * 5        | entities | 1        | 9             | 9
+ * 6        | levels   | 1        | 10            | 10
  */
-static const uint8_t  show_action_idx[] = {0, 0, 3, 7, 8, 9, 10};
+static const uint8_t show_action_idx[] = {0, 0, 3, 7, 8, 9, 10};
+
+// Bitmask identifying which action indices support Level 3 options (show_options)
 static const uint32_t show_allow_opt = BIT(0) | BIT(3) | BIT(5);
+
+/**
+ * @brief Execution handlers mapped to the 1D Action Index.
+ */
 static void (*show_action[])(EmbeddedCli *cli, char *args, int count) = {
-    show_stats_log,  // show stats log
-    show_stats_sys,  // show stats sys
-    show_stats_task, // show stats task
+    show_stats_log,  // [0] show stats log [clear]
+    show_stats_sys,  // [1] show stats sys
+    show_stats_task, // [2] show stats task
 
-    show_config,       // show config
-    show_config_short, // show config short
-    show_config_sim,   // show config simulatiom
-    show_config_log,   // show config log
+    show_config,       // [3] show config (hybrid: leaf + path)
+    show_config_short, // [4] show config short
+    show_config_sim,   // [5] show config sim [default|current]
+    show_config_log,   // [6] show config log
 
-    show_version,    // show version
-    show_domains,    // show domains
-    show_entities,   // show entities
-    show_log_levels, // show log levels
+    show_version,    // [7] show version
+    show_domains,    // [8] show domains
+    show_entities,   // [9] show entities
+    show_log_levels, // [10] show log levels
 };
 
 static const cmd_comp_desc_t show_cmd_desc = {
@@ -474,12 +525,15 @@ static const cmd_comp_desc_t show_cmd_desc = {
              .level1 = show_cmd_compo_1,
              .level2 = show_cmd_compos,
              .level3 = show_options,
-             .size = (uint16_t)(sizeof(show_options) / sizeof(comp_opt_t)),
-             },
-    .action_idx = show_action_idx,
+             .opt_size = (uint16_t)(sizeof(show_options) / sizeof(comp_opt_t)),
+             .spec_idx = 0, // No special arg completion logic
+    },
+    .act_idx = show_action_idx,
     .opt_mask = show_allow_opt,
     .action = show_action,
 };
+
+// -- End of globals --
 
 void do_help(EmbeddedCli *cli, const char **options, bool usage, const char *prefix)
 {
@@ -495,7 +549,7 @@ void do_help(EmbeddedCli *cli, const char **options, bool usage, const char *pre
         if (usage)
             n += snprintf(msg + n, sizeof(msg) - n, " <");
 
-        bool first_word = false;
+        bool after_1st_word = false;
         for (int i = 0; options[i] != nullptr; i++) {
             if (options[i][0] == '\0')
                 continue;
@@ -504,17 +558,17 @@ void do_help(EmbeddedCli *cli, const char **options, bool usage, const char *pre
                 break;
 
             const char *sep = "";
-            if (first_word) {
-                sep = usage ? "|" : " ";
+            if (after_1st_word) {
+                sep = "|";
             } else {
                 sep = usage ? "" : " ";
             }
 
             n += snprintf(msg + n, sizeof(msg) - n, "%s%s", sep, options[i]);
-            first_word = true;
+            after_1st_word = true;
         }
 
-        if (usage && first_word)
+        if (usage && after_1st_word)
             strncat(msg, ">", sizeof(msg) - strlen(msg) - 1);
     }
     embeddedCliPrint(cli, msg);
@@ -524,15 +578,18 @@ void do_help(EmbeddedCli *cli, const char **options, bool usage, const char *pre
 bool do_sub_completion(EmbeddedCli *cli, const char **options, const char *token)
 {
     const char *match = nullptr;
+    const char *matches[8];
     size_t      len = strlen(token);
     int         count = 0;
 
     // find matches
     for (int i = 0; options[i] != nullptr; i++) {
         if (strncmp(options[i], token, len) == 0) {
-            if (count == 0)
+            if (count < 8) {
                 match = options[i];
-            count++;
+                matches[count] = match;
+                count++;
+            }
         }
     }
     // is a single match
@@ -542,7 +599,8 @@ bool do_sub_completion(EmbeddedCli *cli, const char **options, const char *token
     }
     // multiple matches (Ambiguity)
     if (count > 1) {
-        do_help(cli, options, false, nullptr);
+        matches[count] = nullptr;
+        do_help(cli, matches, false, nullptr);
         return false;
     }
     // no match
@@ -571,21 +629,25 @@ void do_cmd_arg_completion(EmbeddedCli *cli, const char *token, uint8_t pos, con
         return;
     } else if (pos == 2) {
         const char *arg = embeddedCliGetToken(buf, 2);
+        args_comp_t args_comp;
 
         for (int i = 0; comp->level1[i] != nullptr; i++) {
             if (arg && strncmp(arg, comp->level1[i], strlen(arg)) == 0) {
                 const char **sub = comp->level2[i + 1];
-                if (sub == nullptr || sub[0] == nullptr || sub[0][0] == '\0') {
-                    if (comp->onArgsCompletion)
-                        comp->onArgsCompletion(cli, token, pos);
+                if (sub == nullptr || sub[0] == nullptr) {
+                    args_comp = (args_comp_t)find_by_index(specs, SPECS_SIZE, comp->spec_idx);
+                    if (args_comp)
+                        args_comp(cli, token, pos);
                     return;
                 }
                 if (help) {
                     char msg[48];
                     snprintf(msg, sizeof(msg), "%s %s", comp->name, comp->level1[i]);
                     do_help(cli, sub, false, msg);
-                } else {
-                    do_sub_completion(cli, sub, token);
+                } else if (!do_sub_completion(cli, sub, token)) {
+                    args_comp = (args_comp_t)find_by_index(specs, SPECS_SIZE, comp->spec_idx);
+                    if (args_comp)
+                        args_comp(cli, token, pos);
                 }
                 return;
             }
@@ -596,7 +658,7 @@ void do_cmd_arg_completion(EmbeddedCli *cli, const char *token, uint8_t pos, con
         const char *arg2 = embeddedCliGetToken(buf, 3);
 
         if (!comp->level3 || !arg1 || !arg2)
-            goto is_custom;
+            goto is_special_handling;
         int l1_idx = -1;
         for (int i = 0; comp->level1[i] != nullptr; i++) {
             if (strcmp(arg1, comp->level1[i]) == 0) {
@@ -618,20 +680,19 @@ void do_cmd_arg_completion(EmbeddedCli *cli, const char *token, uint8_t pos, con
             if (l2_idx != -1 && action_idx != nullptr) {
                 int act_idx = action_idx[l1_idx + 1] + l2_idx;
                 if (comp->level3) {
-                    for (int i = 0; i < comp->size; i++) {
-                        if (comp->level3[i].idx == act_idx) {
-                            do_sub_completion(cli, comp->level3[i].opt, token);
-                            return;
-                        }
-                    }
+                    const char **opt = (const char **)find_by_index(comp->level3, comp->opt_size, act_idx);
+                    if (opt)
+                        do_sub_completion(cli, opt, token);
                 }
             }
         }
+        return;
     }
 
-is_custom:
-    if (comp->onArgsCompletion)
-        comp->onArgsCompletion(cli, token, pos);
+is_special_handling:
+    args_comp_t args_comp = (args_comp_t)find_by_index(specs, SPECS_SIZE, comp->spec_idx);
+    if (args_comp)
+        args_comp(cli, token, pos);
 }
 
 void set_cmd_completion(EmbeddedCli *cli, const char *token, uint8_t pos)
@@ -641,7 +702,7 @@ void set_cmd_completion(EmbeddedCli *cli, const char *token, uint8_t pos)
 
 void show_cmd_completion(EmbeddedCli *cli, const char *token, uint8_t pos)
 {
-    do_cmd_arg_completion(cli, token, pos, &show_cmd_desc.comp, show_cmd_desc.action_idx);
+    do_cmd_arg_completion(cli, token, pos, &show_cmd_desc.comp, show_cmd_desc.act_idx);
 }
 
 void cmd_args_dispatch(EmbeddedCli *cli, char *args, int count, const cmd_comp_desc_t *desc)
@@ -679,7 +740,7 @@ void cmd_args_dispatch(EmbeddedCli *cli, char *args, int count, const cmd_comp_d
     char         msg[48];
     const char  *error = "[ERROR] Too many arguments";
     const char **sub_options = desc->comp.level2[idx + 1];
-    int          act_idx = desc->action_idx[idx + 1];
+    int          act_idx = desc->act_idx[idx + 1];
     int          max_args = (sub_options == nullptr || sub_options[0] == nullptr) ? 1 : 2;
     bool         use_opt = (desc->opt_mask & BIT(act_idx));
 
@@ -728,23 +789,21 @@ void cmd_args_dispatch(EmbeddedCli *cli, char *args, int count, const cmd_comp_d
 
         if (arg3 && strcmp(arg3, "?") == 0) {
             char opt_buf[64] = " [options]";
-            if (use_opt && desc->comp.level3) {
-                const char **opt = nullptr;
-                for (int i = 0; i < desc->comp.size; i++) {
-                    if (desc->comp.level3[i].idx == act_idx) {
-                        opt = desc->comp.level3[i].opt;
-                        break;
+            if (use_opt) {
+                if (desc->comp.level3) {
+                    const char **opt = (const char **)find_by_index(desc->comp.level3, desc->comp.opt_size, act_idx);
+                    if (opt && opt[0] != nullptr) {
+                        opt_buf[2] = '\0';
+                        for (int i = 0; opt[i] != nullptr; i++) {
+                            if (i > 0)
+                                strcat(opt_buf, "|");
+                            strcat(opt_buf, opt[i]);
+                        }
+                        strcat(opt_buf, "]");
                     }
                 }
-                if (opt && opt[0] != nullptr) {
-                    opt_buf[2] = '\0';
-                    for (int i = 0; opt[i] != nullptr; i++) {
-                        if (i > 0)
-                            strcat(opt_buf, "|");
-                        strcat(opt_buf, opt[i]);
-                    }
-                    strcat(opt_buf, "]");
-                }
+            } else {
+                opt_buf[0] = '\0';
             }
 
             snprintf(msg, sizeof(msg), "%s %s %s%s", desc->comp.name, arg1, arg2, opt_buf);
@@ -1033,8 +1092,14 @@ void on_set_log_command(EmbeddedCli *cli, char *args, int count)
 
 void on_set_command(EmbeddedCli *cli, char *args, void *context)
 {
-    int         count = (args == nullptr) ? 0 : embeddedCliGetTokenCount(args);
-    const char *arg = embeddedCliGetToken(args, 1);
+    int count = (args == nullptr) ? 0 : embeddedCliGetTokenCount(args);
+
+    const char *arg = (count > 0) ? embeddedCliGetToken(args, 1) : nullptr;
+
+    if (count == 0 || (arg && strcmp(arg, "?") == 0)) {
+        do_help(cli, set_cmd_comp.level1, true, "set");
+        return;
+    }
 
     bool log = (strcmp(arg, "log") == 0);
     bool sim = (strcmp(arg, "sim") == 0);
