@@ -31,8 +31,15 @@ extern "C" {
 #define BYTES_TO_CLI_UINTS(bytes) \
   (((bytes) + CLI_UINT_SIZE - 1)/CLI_UINT_SIZE)
 
-#define MAX_BINDINGS 128
+#define MAX_BINDINGS 48
 #define MAX_ARGS_COMPLETIONS 8
+
+#define BINDING_INVALID 0xFFFF
+#define BINDING_FLAG_HIDDEN (1u << 8) // Exclude from help and autocomplete
+#define BINDING_FLAG_TOKENIZE_ARGS (1u << 9) // Tokenize command arguments before calling binding function
+#define BINDING_FLAG_HAS_HELP (1u << 10) // Command has its help
+#define BINDING_FLAG_DIGIT (1u << 11) // Is binding a digit
+#define BINDING_FLAG_WIDE (1u << 12) // System wide binding
 
 typedef struct CliCommand CliCommand;
 typedef struct CliCommandBinding CliCommandBinding;
@@ -66,16 +73,9 @@ struct CliCommandBinding {
     const char *name;
 
     /**
-     * Help string that will be displayed when "help <cmd>" is executed.
-     * Can have multiple lines separated with "\r\n"
-     * Can be NULL if no help is provided.
+     * Flags: see BINDING_FLAG_XXX
      */
-    const char *help;
-
-    /**
-     * Flag to perform tokenization before calling binding function.
-     */
-    bool tokenizeArgs;
+    uint16_t flags;
 
     /**
      * Pointer to any specific app context that is required for this binding.
@@ -166,13 +166,6 @@ struct EmbeddedCliConfig {
      * Size of buffer for cli and internal structures (in bytes).
      */
     uint16_t cliBufferSize;
-
-    /**
-     * Whether autocompletion should be enabled.
-     * If false, autocompletion is disabled but you still can use 'tab' to
-     * complete current command manually.
-     */
-    bool enableAutoComplete;
 };
 
 /**
@@ -241,9 +234,9 @@ void embeddedCliProcess(EmbeddedCli *cli);
  * is not added and false is returned
  * @param cli
  * @param binding
- * @return true if binding was added, false otherwise
+ * @return binding index or invalid index
  */
-bool embeddedCliAddBinding(EmbeddedCli *cli, CliCommandBinding binding);
+uint16_t embeddedCliAddBinding(EmbeddedCli *cli, CliCommandBinding binding);
 
 /**
  * Print specified string and account for currently entered but not submitted
@@ -308,7 +301,7 @@ uint16_t embeddedCliFindToken(const char *tokenizedStr, const char *token);
 uint16_t embeddedCliGetTokenCount(const char *tokenizedStr);
 
 /**
- * Registers a custom argument completion callback for a specific command.
+ * @brief Registers a custom argument completion callback for a specific command.
  * 
  * Maps a command name to a handler function that provides sub-command 
  * suggestions or help text.
@@ -336,8 +329,7 @@ bool embeddedCliAddCompletion(const char *name,
 uint16_t embeddedCliGetBindingsCount(EmbeddedCli *cli);
 
 /**
- * Retrieves the current raw input string from the CLI buffer.
- *
+ * @brief Retrieves the current raw input string from the CLI buffer.
  * Provides access to the text currently being typed by the user.
  * 
  * @param cli Pointer to the CLI instance.
@@ -359,13 +351,93 @@ const char* embeddedCliGetInputString(EmbeddedCli *cli, uint16_t *input_size);
 void embeddedCliCompletion(EmbeddedCli *cli, const char *name);
 
 /**
- * Forces a redraw of the current CLI input line.
+ * @brief Forces a redraw of the current CLI input line.
  * 
  * Synchronizes the display with the internal command buffer.
  * 
  * @param cli Pointer to the CLI instance.
  */
 void embeddedCliRefresh(EmbeddedCli *cli);
+
+/**
+ * @brief Scans for and counts duplicate command bindings.
+ *
+ * Performs an O(n^2) check across all registered commands to ensure
+ * name uniqueness.
+ *
+ * @param cli Pointer to the CLI instance.
+ * @return Number of duplicate bindings found (0 if unique).
+ */
+int embeddedCliCheckBindingDuplicates(EmbeddedCli *cli);
+
+/**
+ * @brief Scans for and counts duplicate argument completion tokens.
+ *
+ * Compares name hashes in the completion table to detect collisions.
+ *
+ * @return Number of duplicate hashes found (0 if unique).
+ */
+int embeddedCliCheckArgsCompletionDuplicates(void);
+
+/**
+ * @brief Sets a dynamic data context for high-priority autocompletion.
+ *
+ * Provides a list of external strings (e.g., device names) that the CLI
+ * will prioritize during tab-completion before checking static commands.
+ *
+ * @param base   Pointer to the start of the data array.
+ * @param count  Number of elements in the array.
+ * @param stride Memory offset between elements.
+ */
+void embeddedCliSetContext(const void *base, int count, uint16_t stride);
+
+typedef struct EmbeddedCliContext {
+    const void *base;
+    int         count;
+    uint16_t    stride;
+} EmbeddedCliContext;
+
+/**
+ * @brief Retrieves the active autocompletion data context.
+ *
+ * @return Pointer to the context, or NULL if count is zero.
+ */
+EmbeddedCliContext *embeddedCliGetContext(void);
+
+/**
+ * @brief Configures a secondary application-wide command context.
+ *
+ * Usually points to an index table that maps specific subsets of
+ * commands for filtered autocompletion.
+ *
+ * @param base  Pointer to the index array.
+ * @param count Number of indices in the array.
+ */
+void embeddedCliAddAppContext(uint8_t *base, int count);
+
+/**
+ * @brief Retrieves the active application command context.
+ *
+ * @return Pointer to the context, or NULL if count is zero.
+ */
+EmbeddedCliContext *embeddedCliGetAppContext(void);
+
+/**
+ * @brief Updates the visibility bitmask for the application context.
+ *
+ * Uses a bitwise map (stored in the stride field) to toggle which
+ * indexed commands are eligible for autocompletion.
+ *
+ * @param map Bitmask where set bits exclude/filter specific commands.
+ */
+void embeddedCliSetAppContext(uint16_t map);
+
+/**
+ * @brief Registers an auxiliary callback for the help command.
+ *
+ * @param aux Pointer to the auxiliary function.
+ */
+void embeddedCliAddHelpAux(void (*aux)(EmbeddedCli *cli));
 
 #ifdef __cplusplus
 }

@@ -18,13 +18,7 @@
 
 #define SET_FLAG(flags, flag) ((flags) |= (flag))
 
-#define UNSET_U8FLAG(flags, flag) ((flags) &= (uint8_t) ~(flag))
-
-/**
- * Marks binding as candidate for autocompletion
- * This flag is updated each time getAutocompletedCommand is called
- */
-#define BINDING_FLAG_AUTOCOMPLETE 1u
+#define UNSET_FLAG(flags, flag) ((flags) &= ~(flag))
 
 /**
  * Indicates that rx buffer overflow happened. In such case last command
@@ -58,7 +52,7 @@
 /**
  * Indicates that live autocompletion is enabled
  */
-#define CLI_FLAG_AUTOCOMPLETE_ENABLED 0x20u
+//#define CLI_FLAG_AUTOCOMPLETE_ENABLED 0x20u
 
 /**
 * Indicates that cursor direction should be forward
@@ -151,7 +145,7 @@ struct EmbeddedCliImpl {
     /**
      * Flags for each binding. Sizes are the same as for bindings array
      */
-    uint8_t *bindingsFlags;
+    //uint16_t *bindingsFlags;
 
     uint16_t bindingsCount;
 
@@ -171,7 +165,7 @@ struct EmbeddedCliImpl {
     /**
      * Flags are defined as CLI_FLAG_*
      */
-    uint8_t flags;
+    uint16_t flags;
 
     /**
      * Cursor position for current command from right to left 
@@ -208,7 +202,7 @@ static EmbeddedCliConfig defaultConfig;
  * Number of commands that cli adds. Commands:
  * - help
  */
-static const uint16_t cliInternalBindingCount = 1;
+#define CLI_INTERNAL_BINDING_COUNT 1
 
 static const char *lineBreak = "\r\n";
 
@@ -275,12 +269,6 @@ static void onControlInput(EmbeddedCli *cli, char c);
 static void parseCommand(EmbeddedCli *cli);
 
 /**
- * Print help for given binding (if it is set)
- * @param binding
- */
-static void printBindingHelp(EmbeddedCli *cli, CliCommandBinding *binding);
-
-/**
  * Setup bindings for internal commands, like help
  * @param cli
  */
@@ -293,6 +281,7 @@ static void initInternalBindings(EmbeddedCli *cli);
  * @param context - not used
  */
 static void onHelp(EmbeddedCli *cli, char *tokens, void *context);
+static void helpWithUse(EmbeddedCli *cli, const char **matches, int count);
 
 /**
  * Show error about unknown command
@@ -309,14 +298,7 @@ static void onUnknownCommand(EmbeddedCli *cli, const char *name);
  * @param prefix
  * @return
  */
-static AutocompletedCommand getAutocompletedCommand(EmbeddedCli *cli, const char *prefix);
-
-/**
- * Prints autocompletion result while keeping current command unchanged
- * Prints only if autocompletion is present and only one candidate exists.
- * @param cli
- */
-static void printLiveAutocompletion(EmbeddedCli *cli);
+static int getAutocompletedCommand(EmbeddedCli *cli, const char **matches, const char *prefix);
 
 /**
  * Handles autocomplete request. If autocomplete possible - fills current
@@ -466,7 +448,7 @@ static uint32_t inuseCompletion[COMPLETION_ARRAY_SIZE];
 static ArgsCompletion completionTable[MAX_ARGS_COMPLETIONS];
 static int completionsCount = 0;
 
-#define BINDING_MAP_SIZE    POW2(2 * MAX_BINDINGS)
+#define BINDING_MAP_SIZE    POW2(2 * (MAX_BINDINGS + CLI_INTERNAL_BINDING_COUNT))
 #define BINDING_MAP_MASK    (BINDING_MAP_SIZE - 1)
 #define BINDING_ARRAY_SIZE  BITMAP_ARRAY_SIZE(BINDING_MAP_SIZE)
 
@@ -486,6 +468,14 @@ static uint32_t inuseBindings[BINDING_ARRAY_SIZE];
 #define CLEAR_IN_USE(map, idx) \
     (map[(idx) >> BITMAP_SHIFT] &= ~(1UL << ((idx) & BITMAP_UNIT_MASK)))
 
+#define MAX_WIDE_BINDINGS 12
+static uint8_t wideBindingsIdx[MAX_WIDE_BINDINGS];
+static uint16_t wideBindingsCount = 0;
+static EmbeddedCliContext cliContext = {NULL, 0, 0};
+static EmbeddedCliContext cliAppContext = {NULL, 0, 0};
+typedef void (*helper_t)(EmbeddedCli *cli);
+static helper_t cliHelpAux;
+
 EmbeddedCliConfig *embeddedCliDefaultConfig(void) {
     defaultConfig.rxBufferSize = 64;
     defaultConfig.cmdBufferSize = 64;
@@ -493,13 +483,12 @@ EmbeddedCliConfig *embeddedCliDefaultConfig(void) {
     defaultConfig.cliBuffer = NULL;
     defaultConfig.cliBufferSize = 0;
     defaultConfig.maxBindingCount = 8;
-    defaultConfig.enableAutoComplete = true;
     defaultConfig.invitation = "> ";
     return &defaultConfig;
 }
 
 uint16_t embeddedCliRequiredSize(EmbeddedCliConfig *config) {
-    uint16_t bindingCount = (uint16_t) (config->maxBindingCount + cliInternalBindingCount);
+    uint16_t bindingsCount = (uint16_t) (config->maxBindingCount + CLI_INTERNAL_BINDING_COUNT);
 
     size_t totalBytes = 
         ALIGN_UP(sizeof(EmbeddedCli), 8) +
@@ -507,8 +496,7 @@ uint16_t embeddedCliRequiredSize(EmbeddedCliConfig *config) {
         ALIGN_UP(config->rxBufferSize, 8) +
         ALIGN_UP(config->cmdBufferSize + 8, 8) +
         ALIGN_UP(config->historyBufferSize, 8) +
-        ALIGN_UP(bindingCount * sizeof(CliCommandBinding), 8) +
-        ALIGN_UP(bindingCount * sizeof(uint8_t), 8);
+        ALIGN_UP(bindingsCount * sizeof(CliCommandBinding), 8);
 
     return (uint16_t) totalBytes;
 }
@@ -516,14 +504,14 @@ uint16_t embeddedCliRequiredSize(EmbeddedCliConfig *config) {
 EmbeddedCli *embeddedCliNew(EmbeddedCliConfig *config) {
     EmbeddedCli *cli = NULL;
 
-    uint16_t bindingCount = (uint16_t) (config->maxBindingCount + cliInternalBindingCount);
+    uint16_t bindingsCount = (uint16_t) (config->maxBindingCount + CLI_INTERNAL_BINDING_COUNT);
 
     size_t totalSize = embeddedCliRequiredSize(config);
     totalSize = ALIGN_UP(totalSize, 8); 
 
     bool allocated = false;
     if (config->cliBuffer == NULL) {
-        config->cliBuffer = (CLI_UINT *) malloc(totalSize); // malloc guarantees alignment.
+        config->cliBuffer = (CLI_UINT *) malloc(totalSize);
         if (config->cliBuffer == NULL)
             return NULL;
         allocated = true;
@@ -550,26 +538,19 @@ EmbeddedCli *embeddedCliNew(EmbeddedCliConfig *config) {
     buf += BYTES_TO_CLI_UINTS(ALIGN_UP(config->cmdBufferSize * sizeof(char) + 8, 8));
 
     impl->bindings = (CliCommandBinding *) buf;
-    buf += BYTES_TO_CLI_UINTS(ALIGN_UP(bindingCount * sizeof(CliCommandBinding), 8));
-
-    impl->bindingsFlags = (uint8_t *) buf;
-    buf += BYTES_TO_CLI_UINTS(ALIGN_UP(bindingCount, 8));
-
+    buf += BYTES_TO_CLI_UINTS(ALIGN_UP(bindingsCount * sizeof(CliCommandBinding), 8));
     impl->history.buf = (char *) buf;
     impl->history.bufferSize = config->historyBufferSize;
 
     if (allocated)
         SET_FLAG(impl->flags, CLI_FLAG_ALLOCATED);
 
-    if (config->enableAutoComplete)
-        SET_FLAG(impl->flags, CLI_FLAG_AUTOCOMPLETE_ENABLED);
-
     impl->rxBuffer.size = config->rxBufferSize;
     impl->rxBuffer.front = 0;
     impl->rxBuffer.back = 0;
     impl->cmdMaxSize = config->cmdBufferSize;
     impl->bindingsCount = 0;
-    impl->maxBindingsCount = (uint16_t) (config->maxBindingCount + cliInternalBindingCount);
+    impl->maxBindingsCount = (uint16_t) (config->maxBindingCount + CLI_INTERNAL_BINDING_COUNT);
     impl->lastChar = '\0';
     impl->invitation = config->invitation;
     impl->cursorPos = 0;
@@ -617,7 +598,7 @@ void embeddedCliProcess(EmbeddedCli *cli) {
             onCharInput(cli, c);
         }
 
-        printLiveAutocompletion(cli);
+        //printLiveAutocompletion(cli);
 
         impl->lastChar = c;
     }
@@ -626,21 +607,25 @@ void embeddedCliProcess(EmbeddedCli *cli) {
     if (IS_FLAG_SET(impl->flags, CLI_FLAG_OVERFLOW)) {
         impl->cmdSize = 0;
         impl->cmdBuffer[impl->cmdSize] = '\0';
-        UNSET_U8FLAG(impl->flags, CLI_FLAG_OVERFLOW);
+        UNSET_FLAG(impl->flags, CLI_FLAG_OVERFLOW);
     }
 }
 
-bool embeddedCliAddBinding(EmbeddedCli *cli, CliCommandBinding binding) {
+uint16_t embeddedCliAddBinding(EmbeddedCli *cli, CliCommandBinding binding) {
     PREPARE_IMPL(cli);
     if (impl->bindingsCount == impl->maxBindingsCount)
-        return false;
+        return BINDING_INVALID;
 
-    impl->bindings[impl->bindingsCount] = binding;
+    int bindingsCount = impl->bindingsCount;
+    impl->bindings[bindingsCount] = binding;
 
-    registerBindingIndex(impl->bindings[impl->bindingsCount].name, impl->bindingsCount);
-
+    if (IS_FLAG_SET(binding.flags, BINDING_FLAG_WIDE) &&
+        wideBindingsCount < MAX_WIDE_BINDINGS) {
+        wideBindingsIdx[wideBindingsCount++] = bindingsCount;
+    }
+    registerBindingIndex(impl->bindings[bindingsCount].name, bindingsCount);
     ++impl->bindingsCount;
-    return true;
+    return bindingsCount;
 }
 
 void embeddedCliPrint(EmbeddedCli *cli, const char *string) {
@@ -669,8 +654,6 @@ void embeddedCliPrint(EmbeddedCli *cli, const char *string) {
         writeToOutput(cli, impl->cmdBuffer);
         impl->inputLineLength = impl->cmdSize;
         moveCursor(cli, impl->cursorPos, CURSOR_DIRECTION_BACKWARD);
-
-        printLiveAutocompletion(cli);
     }
 }
 
@@ -801,8 +784,6 @@ static void navigateHistory(EmbeddedCli *cli, bool navigateUp) {
     writeToOutput(cli, impl->cmdBuffer);
     impl->inputLineLength = impl->cmdSize;
     impl->cursorPos = 0;
-
-    printLiveAutocompletion(cli);
 }
 
 static void onEscapedInput(EmbeddedCli *cli, char c) {
@@ -810,7 +791,7 @@ static void onEscapedInput(EmbeddedCli *cli, char c) {
 
     if (c >= 64 && c <= 126) {
         // handle escape sequence
-        UNSET_U8FLAG(impl->flags, CLI_FLAG_ESCAPE_MODE);
+        UNSET_FLAG(impl->flags, CLI_FLAG_ESCAPE_MODE);
 
         if (c == 'A' || c == 'B') {
             // treat \e[..A as cursor up and \e[..B as cursor down
@@ -930,6 +911,7 @@ static void parseCommand(EmbeddedCli *cli) {
     char *cmdName = NULL;
     char *cmdArgs = NULL;
     bool nameFinished = false;
+    uint16_t len = 0;
 
     // find command name and command args inside command buffer
     for (int i = 0; i < impl->cmdSize; ++i) {
@@ -940,8 +922,10 @@ static void parseCommand(EmbeddedCli *cli) {
             // so name is a correct null-terminated string
             if (cmdArgs == NULL)
                 impl->cmdBuffer[i] = '\0';
-            if (cmdName != NULL)
+            if (cmdName != NULL) {
                 nameFinished = true;
+                len = i;
+            }
 
         } else if (cmdName == NULL) {
             cmdName = &impl->cmdBuffer[i];
@@ -958,26 +942,27 @@ static void parseCommand(EmbeddedCli *cli) {
         return;
 
     int i = findBindingIndex(cmdName, impl->bindings);
-    if (i == -1)
+    if (i == -1) {
+        onUnknownCommand(cli, cmdName);
         return;
+    }
 
     if (impl->bindings[i].binding != NULL) {
-        if (impl->bindings[i].tokenizeArgs)
+        if (IS_FLAG_SET(impl->bindings[i].flags, BINDING_FLAG_TOKENIZE_ARGS))
             embeddedCliTokenizeArgs(cmdArgs);
         // currently, output is blank line, so we can just print directly
         SET_FLAG(impl->flags, CLI_FLAG_DIRECT_PRINT);
-        // check if help was requested (help is printed when no other options are set)
-        if (cmdArgs != NULL && (strcmp(cmdArgs, "-h") == 0 || strcmp(cmdArgs, "--help") == 0)) {
-            printBindingHelp(cli, &impl->bindings[i]);
+        // check if help was requested for commands without help
+        if (!IS_FLAG_SET(impl->bindings[i].flags, BINDING_FLAG_HAS_HELP) &&
+           (cmdArgs != NULL && (strcmp(cmdArgs, "?") == 0))) {
+            cmdName[len + 1] = '\0';
+            onHelp(cli, cmdName, NULL);
         } else {
             impl->bindings[i].binding(cli, cmdArgs, impl->bindings[i].context);
         }
-        UNSET_U8FLAG(impl->flags, CLI_FLAG_DIRECT_PRINT);
+        UNSET_FLAG(impl->flags, CLI_FLAG_DIRECT_PRINT);
         return;
-    }
-    // command not found in bindings or binding was null
-    // try to call default callback
-    if (cli->onCommand != NULL) {
+    } else if (cli->onCommand != NULL) {
         CliCommand command;
         command.name = cmdName;
         command.args = cmdArgs;
@@ -985,35 +970,55 @@ static void parseCommand(EmbeddedCli *cli) {
         // currently, output is blank line, so we can just print directly
         SET_FLAG(impl->flags, CLI_FLAG_DIRECT_PRINT);
         cli->onCommand(cli, &command);
-        UNSET_U8FLAG(impl->flags, CLI_FLAG_DIRECT_PRINT);
+        UNSET_FLAG(impl->flags, CLI_FLAG_DIRECT_PRINT);
     } else {
         onUnknownCommand(cli, cmdName);
     }
 }
 
-static void printBindingHelp(EmbeddedCli *cli, CliCommandBinding *binding) {
-    if (binding->help != NULL) {
-        cli->writeChar(cli, '\t');
-        writeToOutput(cli, binding->help);
-        writeToOutput(cli, lineBreak);
-    }
-}
-
 static void initInternalBindings(EmbeddedCli *cli) {
     CliCommandBinding b = {
-            "help",
-            "Print list of commands",
-            true,
-            NULL,
-            onHelp,
+        .name = "help",
+        .flags = BINDING_FLAG_WIDE,
+        .binding = onHelp,
     };
     embeddedCliAddBinding(cli, b);
+}
+
+void embeddedCliAddHelpAux(void (*aux)(EmbeddedCli *cli)) {
+    cliHelpAux = aux;
+}
+
+static void helpWithUse(EmbeddedCli *cli, const char **matches, int count) {
+    char msg[128] = "use: ";
+    int n = 5;
+    const char *sep = "";
+    bool after_1st_word = false;
+    if (cliHelpAux)
+        cliHelpAux(cli);
+    for (int i = 0; i < count; i++) {
+        if (matches[i][0] == '\0')
+            continue;
+
+        if (n >= (int)sizeof(msg) - 20)
+            break;
+
+        if (after_1st_word) {
+            sep = "|";
+        }
+
+        n += snprintf(msg + n, sizeof(msg) - n, "%s%s", sep, matches[i]);
+        after_1st_word = true;
+    }
+    embeddedCliPrint(cli, msg);
 }
 
 static void onHelp(EmbeddedCli *cli, char *tokens, void *context) {
     UNUSED(context);
     PREPARE_IMPL(cli);
 
+    if (cliHelpAux)
+        cliHelpAux(cli);
     if (impl->bindingsCount == 0) {
         writeToOutput(cli, "Help is not available");
         writeToOutput(cli, lineBreak);
@@ -1022,39 +1027,35 @@ static void onHelp(EmbeddedCli *cli, char *tokens, void *context) {
 
     uint16_t tokenCount = embeddedCliGetTokenCount(tokens);
     if (tokenCount == 0) {
+        writeToOutput(cli, "use: ");
         for (int i = 0; i < impl->bindingsCount; ++i) {
-            writeToOutput(cli, " * ");
-            writeToOutput(cli, impl->bindings[i].name);
-            writeToOutput(cli, lineBreak);
-            printBindingHelp(cli, &impl->bindings[i]);
+            if (!IS_FLAG_SET(impl->bindings[i].flags, BINDING_FLAG_HIDDEN)) {
+                writeToOutput(cli, impl->bindings[i].name);
+                writeToOutput(cli, "|");
+            }
         }
+        writeToOutput(cli, lineBreak);
+        writeToOutput(cli, "help: <cmd> ? or <cmd> <arg>? (with TAB)");
+        writeToOutput(cli, lineBreak);
     } else if (tokenCount == 1) {
         // try find command
-        const char *helpStr = NULL;
         const char *cmdName = embeddedCliGetToken(tokens, 1);
         bool found = false;
         for (int i = 0; i < impl->bindingsCount; ++i) {
             if (strcmp(impl->bindings[i].name, cmdName) == 0) {
-                helpStr = impl->bindings[i].help;
                 found = true;
                 break;
             }
         }
-        if (found && helpStr != NULL) {
-            writeToOutput(cli, " * ");
+        if (found) {
+            writeToOutput(cli, "Usage: ");
             writeToOutput(cli, cmdName);
-            writeToOutput(cli, lineBreak);
-            cli->writeChar(cli, '\t');
-            writeToOutput(cli, helpStr);
-            writeToOutput(cli, lineBreak);
-        } else if (found) {
-            writeToOutput(cli, "Help is not available");
             writeToOutput(cli, lineBreak);
         } else {
             onUnknownCommand(cli, cmdName);
         }
     } else {
-        writeToOutput(cli, "Command \"help\" receives one or zero arguments");
+        writeToOutput(cli, "Command receives one or zero arguments");
         writeToOutput(cli, lineBreak);
     }
 }
@@ -1066,89 +1067,88 @@ static void onUnknownCommand(EmbeddedCli *cli, const char *name) {
     writeToOutput(cli, lineBreak);
 }
 
-static AutocompletedCommand getAutocompletedCommand(EmbeddedCli *cli, const char *prefix) {
-    AutocompletedCommand cmd = {NULL, 0, 0};
+static inline const char *getNameFromBindings(CliCommandBinding *bindings, int i) {
+    return bindings[i].name;
+}
 
+static inline const char *getNameFromContext(EmbeddedCliContext *ctx, int i) {
+    return *(const char **)((uint8_t *)ctx->base + (i * ctx->stride));
+}
+
+static int getAutocompletedCommand(EmbeddedCli *cli, const char **matches, const char *prefix) {
     size_t prefixLen = strlen(prefix);
+    int count = 0;
+    int maxcount = 0;
+    const char *name;
 
     PREPARE_IMPL(cli);
     if (impl->bindingsCount == 0 || prefixLen == 0)
-        return cmd;
+        return 0;
 
+    EmbeddedCliContext *ctx = embeddedCliGetContext();
 
-    for (int i = 0; i < impl->bindingsCount; ++i) {
-        const char *name = impl->bindings[i].name;
-        size_t len = strlen(name);
+    maxcount = ctx ? ctx->count : 0;
 
-        // unset autocomplete flag
-        UNSET_U8FLAG(impl->bindingsFlags[i], BINDING_FLAG_AUTOCOMPLETE);
-
-        if (len < prefixLen)
-            continue;
-
-        // check if this command is candidate for autocomplete
-        bool isCandidate = true;
-        for (size_t j = 0; j < prefixLen; ++j) {
-            if (prefix[j] != name[j]) {
-                isCandidate = false;
+    for (int i = 0; i < maxcount; i++) {
+        name = getNameFromContext(ctx, i);
+        if (strncmp(name, prefix, prefixLen) == 0) {
+            if (count < 8) {
+                matches[count] = name;
+                count++;
+            } else {
                 break;
+            }            
+        }
+    }
+
+    ctx = embeddedCliGetAppContext();
+    const uint8_t *bindingIdx;
+    uint16_t map = 0;
+
+    if (count == 0) {
+        for (int n = 0; n < 2; n++) {
+            if (n) {
+                maxcount = ctx->count;
+                bindingIdx = ctx->base;
+                map = ~(ctx->stride);
+            } else {
+                maxcount = wideBindingsCount;
+                bindingIdx = wideBindingsIdx;
+            }
+            for (int i = 0; i < maxcount; i++) {
+                if (map & (1 << i))
+                    continue;
+                int idx = bindingIdx[i];
+                name = getNameFromBindings(impl->bindings, idx);
+                if (strncmp(name, prefix, prefixLen) == 0) {
+                    if (count < 8) {
+                        matches[count] = name;
+                        count++;
+                    } else {
+                        break;
+                    }
+                }
             }
         }
-        if (!isCandidate)
-            continue;
+    }
 
-        impl->bindingsFlags[i] |= BINDING_FLAG_AUTOCOMPLETE;
-
-        if (cmd.candidateCount == 0 || len < cmd.autocompletedLen)
-            cmd.autocompletedLen = (uint16_t) len;
-
-        ++cmd.candidateCount;
-
-        if (cmd.candidateCount == 1) {
-            cmd.firstCandidate = name;
-            continue;
-        }
-
-        for (size_t j = impl->cmdSize; j < cmd.autocompletedLen; ++j) {
-            if (cmd.firstCandidate[j] != name[j]) {
-                cmd.autocompletedLen = (uint16_t) j;
-                break;
+    if (count == 0) {
+        maxcount = impl->bindingsCount;
+        for (int i = 0; i < maxcount; i++) {
+            if (IS_FLAG_SET(impl->bindings[i].flags, BINDING_FLAG_DIGIT))
+                continue;
+            name = getNameFromBindings(impl->bindings, i);
+            if (strncmp(name, prefix, prefixLen) == 0) {
+                if (count < 8) {
+                    matches[count] = name;
+                    count++;
+                } else {
+                    break;
+                }
             }
         }
     }
-
-    return cmd;
-}
-
-static void printLiveAutocompletion(EmbeddedCli *cli) {
-    PREPARE_IMPL(cli);
-
-    if (!IS_FLAG_SET(impl->flags, CLI_FLAG_AUTOCOMPLETE_ENABLED))
-        return;
-
-    AutocompletedCommand cmd = getAutocompletedCommand(cli, impl->cmdBuffer);
-
-    if (cmd.candidateCount == 0) {
-        cmd.autocompletedLen = impl->cmdSize;
-    }
-
-    // save cursor location
-    writeToOutput(cli, escSeqCursorSave);
-
-    moveCursor(cli, impl->cursorPos, CURSOR_DIRECTION_FORWARD);
-
-    // print live autocompletion (or nothing, if it doesn't exist)
-    for (size_t i = impl->cmdSize; i < cmd.autocompletedLen; ++i) {
-        cli->writeChar(cli, cmd.firstCandidate[i]);
-    }
-    // replace with spaces previous autocompletion
-    for (size_t i = cmd.autocompletedLen; i < impl->inputLineLength; ++i) {
-        cli->writeChar(cli, ' ');
-    }
-    impl->inputLineLength = cmd.autocompletedLen;
-
-    // restore cursor
-    writeToOutput(cli, escSeqCursorRestore);
+    return count;
 }
 
 static void onAutocompleteRequest(EmbeddedCli *cli) {
@@ -1172,21 +1172,17 @@ static void onAutocompleteRequest(EmbeddedCli *cli) {
 
     // --- Command Completion ---
     if (firstSpace == NULL) {
-        AutocompletedCommand cmd = getAutocompletedCommand(cli, impl->cmdBuffer);
-        
-        if (cmd.candidateCount > 0 && cmd.firstCandidate != NULL) {
-            uint16_t currentLen = (uint16_t)strlen(impl->cmdBuffer);
-            if (cmd.autocompletedLen > currentLen) {
-                for (uint16_t i = currentLen; i < cmd.autocompletedLen; ++i) {
-                    onCharInput(cli, cmd.firstCandidate[i]);
-                }
-            }
-            if (cmd.candidateCount == 1)
-                onCharInput(cli, ' ');
-            embeddedCliRefresh(cli);
+        const char *matches[8];
+        int count = getAutocompletedCommand(cli, matches, impl->cmdBuffer);
+        // is a single match
+        if (count == 1) {
+            embeddedCliCompletion(cli, matches[0]);
+        } else if (count > 1) {
+            helpWithUse(cli, matches, count);
         }
+        embeddedCliRefresh(cli);
         return;
-    } 
+    }
 
     // --- Sub-Command / Argument Completion ---
     alignas(8) char cmdName[32+8];
@@ -1382,6 +1378,7 @@ static uint16_t getTokenPosition(const char *tokenizedStr, uint16_t pos) {
 /*
  * --- Args auto-completion and binding lookup definitions ---
  */
+
 uint16_t embeddedCliGetBindingsCount(EmbeddedCli *cli) {
     PREPARE_IMPL(cli);
     return impl->bindingsCount;
@@ -1398,20 +1395,20 @@ void embeddedCliCompletion(EmbeddedCli *cli, const char *name) {
     PREPARE_IMPL(cli);
     size_t nameLen = strlen(name);
     
-    // 1. Find the fragment start (backwards from cursor)
+    // Find the fragment start (backwards from cursor)
     uint16_t tokenStart = impl->cursorPos;
     while (tokenStart > 0 && impl->cmdBuffer[tokenStart - 1] != ' ') {
         tokenStart--;
     }
 
-    // 2. Capacity check (+2 for space and null)
+    // Capacity check (+2 for space and null)
     if ((size_t)tokenStart + nameLen + 2 >= (size_t)impl->cmdMaxSize) 
         return;
 
-    // 3. Overwrite the fragment with the full name
+    // Overwrite the fragment with the full name
     memcpy(&impl->cmdBuffer[tokenStart], name, nameLen);
     
-    // 4. Update cmdSize and add trailing space
+    // Update cmdSize and add trailing space
     impl->cmdSize = (uint16_t)(tokenStart + nameLen);
     impl->cmdBuffer[impl->cmdSize++] = ' '; 
     impl->cmdBuffer[impl->cmdSize] = '\0';
@@ -1602,4 +1599,68 @@ bool embeddedCliAddCompletion(const char *name,
     }
 
     return false; // Should never reach here
+}
+
+static bool compareBindings(const CliCommandBinding *a, const CliCommandBinding *b) {
+    return (strcmp(a->name, b->name) == 0);
+}
+
+static inline bool compareArgsCompletion(const ArgsCompletion *a, const ArgsCompletion *b) {
+    return (a->nameHash == b->nameHash);
+}
+
+int embeddedCliCheckBindingDuplicates(EmbeddedCli *cli) {
+    PREPARE_IMPL(cli);
+    int count = 0;
+    uint16_t bindingsCount = impl->bindingsCount;
+    if (bindingsCount < 2)
+        return 0;
+
+    for (uint16_t i = 0; i < bindingsCount - 1; i++) {
+        for (uint16_t j = i + 1; j < bindingsCount; j++) {
+            if (compareBindings(&impl->bindings[i], &impl->bindings[j])) {
+                count++;
+            }
+        }
+    }
+    return count;
+}
+
+int embeddedCliCheckArgsCompletionDuplicates(void) {
+    int count = 0;
+    if (completionsCount < 2)
+        return 0;
+
+    for (uint16_t i = 0; i < completionsCount - 1; i++) {
+        for (uint16_t j = i + 1; j < completionsCount; j++) {
+            if (compareArgsCompletion(&completionTable[i], &completionTable[j])) {
+                count++;
+            }
+        }
+    }
+    return count;
+}
+
+void embeddedCliSetContext(const void *base, int count, uint16_t stride) {
+    cliContext.base = base;
+    cliContext.count = count;
+    cliContext.stride = stride;
+}
+
+EmbeddedCliContext *embeddedCliGetContext(void) {
+    return cliContext.count ? &cliContext : NULL;
+}
+
+void embeddedCliAddAppContext(uint8_t *base, int count)
+{
+    cliAppContext.base = base;
+    cliAppContext.count = count;
+}
+
+EmbeddedCliContext *embeddedCliGetAppContext(void) {
+    return cliAppContext.count ? &cliAppContext : NULL;
+}
+
+void embeddedCliSetAppContext(uint16_t map) {
+    cliAppContext.stride = map;
 }
