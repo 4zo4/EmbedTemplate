@@ -39,9 +39,10 @@ static const char *const index_str[] = {
 void show_test_menu(EmbeddedCli *cli)
 {
     cli_clear_menu_region();
+    embeddedCliSetAppContext(0x0);
 
-    embeddedCliPrint(cli, (cli_data.mode == TEST_SYS) ? "\nSystem Infra Blocks:" : "\nDevices:");
-
+    embeddedCliPrint(cli, (cli_data.mode == TEST_SYS) ? "\nSystem Blocks:" : "\nDevices:");
+    embeddedCliSetContext(cli_data.registry, cli_data.test, sizeof(test_registry_t));
     for (int i = 0; i < cli_data.test; i++) {
         char line[128];
         snprintf(
@@ -56,7 +57,7 @@ void show_test_menu(EmbeddedCli *cli)
 
 void on_execute_test(EmbeddedCli *cli, char *args, void *context)
 {
-    cli_data.no_error = true;
+    cli_data.flags.no_error = true;
     const int max_index = get_max_index();
 
     if (cli_data.test >= max_index) {
@@ -77,7 +78,7 @@ void on_execute_test(EmbeddedCli *cli, char *args, void *context)
         }
     }
 
-    cli_data.write_enable = true;
+    cli_data.flags.write_enable = true;
     putchar('\n'); // ensure test output starts on its own line
 
     if (!test_belongs_to_block) {
@@ -112,13 +113,13 @@ void on_enter_tests(EmbeddedCli *cli, char *args, void *context)
 
     const test_registry_t *block = &cli_data.registry[index];
 
-    cli_data.write_enable = true;
+    cli_data.flags.write_enable = true;
     if (!block->enabled) {
         set_msg("[ERROR] Block disabled");
         return;
     }
 
-    cli_data.no_error = true;
+    cli_data.flags.no_error = true;
     cli_data.test = (int)index; // change state
 
     // Clear the screen and print the clean menu
@@ -127,6 +128,7 @@ void on_enter_tests(EmbeddedCli *cli, char *args, void *context)
     char header[64];
     snprintf(header, sizeof(header), "\n=== %s Tests ===", block->name);
     embeddedCliPrint(cli, header);
+    embeddedCliSetContext(block->tests, block->count, sizeof(test_desc_t));
 
     for (int i = 0; i < block->count; i++) {
         char line[128];
@@ -167,9 +169,9 @@ void on_dev_test_menu(EmbeddedCli *cli, char *args, void *context)
     (void)args;
     (void)context;
     clear_msg();
-    cli_data.write_enable = true;
     cli_data.mode = TEST_DEV;
     cli_data.test = MAX_BLOCK_INDEX;
+    cli_data.flags.write_enable = true;
     cli_data.registry = dev_test_registry;
     show_test_menu(cli);
 }
@@ -179,9 +181,9 @@ void on_sys_test_menu(EmbeddedCli *cli, char *args, void *context)
     (void)args;
     (void)context;
     clear_msg();
-    cli_data.write_enable = true;
     cli_data.mode = TEST_SYS;
     cli_data.test = MAX_INFRA_INDEX;
+    cli_data.flags.write_enable = true;
     cli_data.registry = sys_test_registry;
     show_test_menu(cli);
 }
@@ -190,11 +192,11 @@ static void set_test_registry_bindings(EmbeddedCli *cli, const test_registry_t *
 {
     for (int i = 0; i < count; i++) {
         embeddedCliAddBinding(
-            cli, (CliCommandBinding){.name = reg[i].name, .context = (void *)(uintptr_t)i, .binding = on_enter_tests}
+            cli, (CliCommandBinding){.name = reg[i].name, .flags = BINDING_FLAG_HIDDEN, .context = (void *)(uintptr_t)i, .binding = on_enter_tests}
         );
         for (int j = 0; j < reg[i].count; j++) {
             embeddedCliAddBinding(
-                cli, (CliCommandBinding){.name = reg[i].tests[j].name, .context = (void *)&reg[i].tests[j], .binding = on_execute_test}
+                cli, (CliCommandBinding){.name = reg[i].tests[j].name, .flags = BINDING_FLAG_HIDDEN, .context = (void *)&reg[i].tests[j], .binding = on_execute_test}
             );
         }
     }
@@ -203,6 +205,8 @@ static void set_test_registry_bindings(EmbeddedCli *cli, const test_registry_t *
 void show_test_select_menu(EmbeddedCli *cli)
 {
     cli_clear_menu_region();
+    cli_data.test = TEST_INVALID;
+    embeddedCliSetAppContext(0xC);
     // clang-format off
     const char *msg =
         "\nTest Groups:\r\n"
@@ -218,17 +222,22 @@ void on_test_menu(EmbeddedCli *cli, char *args, void *context)
 {
     (void)args;
     (void)context;
-    cli_data.write_enable = true;
     cli_data.mode = TEST;
-    cli_data.test = -1;
+    cli_data.test = TEST_INVALID;
+    cli_data.flags.write_enable = true;
     show_test_select_menu(cli);
 }
 
 void set_test_commands(EmbeddedCli *cli)
 {
-    embeddedCliAddBinding(cli, (CliCommandBinding){"test", "Test Menu", true, NULL, on_test_menu});
-    embeddedCliAddBinding(cli, (CliCommandBinding){"dev", "Enter Device Tests", true, NULL, on_dev_test_menu});
-    embeddedCliAddBinding(cli, (CliCommandBinding){"sys", "Enter System Tests", true, NULL, on_sys_test_menu});
+    uint16_t bid;
+
+    bid = embeddedCliAddBinding(cli, (CliCommandBinding){"test", BINDING_FLAG_HIDDEN, nullptr, on_test_menu});
+    cli_data.bindings[1] = bid; 
+    bid = embeddedCliAddBinding(cli, (CliCommandBinding){"dev", BINDING_FLAG_HIDDEN, nullptr, on_dev_test_menu});
+    cli_data.bindings[2] = bid; 
+    bid = embeddedCliAddBinding(cli, (CliCommandBinding){"sys", BINDING_FLAG_HIDDEN, nullptr, on_sys_test_menu});
+    cli_data.bindings[3] = bid; 
 
     set_test_registry_bindings(cli, dev_test_registry, MAX_BLOCK_INDEX);
     set_test_registry_bindings(cli, sys_test_registry, MAX_INFRA_INDEX);
@@ -247,8 +256,7 @@ void set_test_commands(EmbeddedCli *cli)
             cli,
             (CliCommandBinding){
                 .name = index_str[i],
-                .help = "Index selection",
-                .tokenizeArgs = true,
+                .flags = BINDING_FLAG_HIDDEN | BINDING_FLAG_DIGIT,
                 .context = (void *)(uintptr_t)i, // pass the raw index
                 .binding = on_number_selected,   // use the dispatcher
             }

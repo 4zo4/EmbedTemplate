@@ -236,19 +236,23 @@ bool is_suspended(void)
 
 void sim_start(void)
 {
-    LOG_SYS_INFO("Simulation Starting...");
-    vTaskResume(xCtrlHandle);
-    vTaskResume(xHwHandle);
-    suspended = false;
+    if (is_suspended()) {
+        LOG_SYS_INFO("Simulation Starting...");
+        vTaskResume(xCtrlHandle);
+        vTaskResume(xHwHandle);
+        suspended = false;
+    }
 }
 
 void sim_suspend(void)
 {
-    LOG_SYS_INFO("Simulation Ending (Entering Dormant State)...");
-    vTaskSuspend(xHwHandle);
-    vTaskSuspend(xCtrlHandle);
-    reset_sim_state(false);
-    suspended = true;
+    if (!is_suspended()) {
+        LOG_SYS_INFO("Simulation Ending (Entering Dormant State)...");
+        vTaskSuspend(xHwHandle);
+        vTaskSuspend(xCtrlHandle);
+        reset_sim_state(false);
+        suspended = true;
+    }
 }
 
 bool sim_pause(void)

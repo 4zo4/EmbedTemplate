@@ -20,11 +20,11 @@
 void clear_msg(void);
 void set_msg(const char *msg);
 void print_msg(EmbeddedCli *cli);
-void on_back(EmbeddedCli *cli, char *args, void *context);
 void sim_start(void);
 void sim_suspend(void);
 bool sim_pause(void);
 void sim_resume(void);
+void cmd_in_test_mode(EmbeddedCli *cli);
 int  set_sim_cfg(int len, stream_t *cfg);
 int  get_sim_cfg(int len, stream_t *cfg, bool cold);
 
@@ -103,6 +103,7 @@ static int       level_id[NUM_LOG_LEVELS] = {LOG_LEVEL_NONE, LOG_LEVEL_CRITICAL,
 void show_main_sys_menu(EmbeddedCli *cli)
 {
     cli_clear_menu_region();
+    embeddedCliSetAppContext(0x0);
     // clang-format off
     const char *msg =
         "\nSystem Commands:\r\n"
@@ -124,46 +125,46 @@ void on_system_menu(EmbeddedCli *cli, char *args, void *context)
     (void)args;
     (void)context;
     clear_msg();
-    cli_data.write_enable = true;
     cli_data.mode = SYSTEM;
     cli_data.test = MAX_BLOCK_INDEX;
+    cli_data.flags.write_enable = true;
     show_main_sys_menu(cli);
 }
 
 void on_start_hw_sim(EmbeddedCli *cli, char *args, void *context)
 {
 #ifdef ENABLE_RTOS
+    cmd_in_test_mode(cli);
     // Start hardware simulation
     sim_start();
 #endif
-    on_system_menu(cli, args, context); // Refresh menu to show we are in system mode
 }
 
 void on_end_hw_sim(EmbeddedCli *cli, char *args, void *context)
 {
 #ifdef ENABLE_RTOS
+    cmd_in_test_mode(cli);
     // Suspend hardware simulation
     sim_suspend();
 #endif
-    on_system_menu(cli, args, context); // Refresh menu to show we are in system mode
 }
 
 void on_pause(EmbeddedCli *cli, char *args, void *context)
 {
 #ifdef ENABLE_RTOS
+    cmd_in_test_mode(cli);
     // Pause hardware simulation
     sim_pause();
 #endif
-    on_system_menu(cli, args, context); // Refresh menu to show we are in system mode
 }
 
 void on_resume(EmbeddedCli *cli, char *args, void *context)
 {
 #ifdef ENABLE_RTOS
+    cmd_in_test_mode(cli);
     // Resume hardware simulation
     sim_resume();
 #endif
-    on_system_menu(cli, args, context); // Refresh menu to show we are in system mode
 }
 
 // show command
@@ -432,15 +433,24 @@ static const char *single[] = {nullptr};
 /**
  * @brief Auto-completion tree for the 'set' command.
  */
-static const char  *set_cmd_compo_1[] = {"log", "sim", "sis", nullptr}; // Level 1: Sub-commands
-static const char  *set_cmd_compo_1_1[] = {"", nullptr};                // Level 2: 'log' (handled by spec_idx 1)
-static const char  *set_cmd_compo_1_2[] = {"phy", "temp", nullptr};     // Level 2: 'sim' options 'set sim phy' | 'set sim temp'
+#ifdef ENABLE_RTOS
+static const char  *set_cmd_compo_1[] = {"log", "sim", nullptr};    // Level 1: Sub-commands
+static const char  *set_cmd_compo_1_1[] = {"", nullptr};            // Level 2: 'log' (handled by spec_idx 1)
+static const char  *set_cmd_compo_1_2[] = {"phy", "temp", nullptr}; // Level 2: 'sim' options 'set sim phy' | 'set sim temp'
 static const char **set_cmd_compos[] = {
     set_cmd_compo_1,   // Root of the 'set' command
     set_cmd_compo_1_1, // 'set log' path
     set_cmd_compo_1_2, // 'set sim' path
     single,
 };
+#else
+static const char  *set_cmd_compo_1[] = {"log", nullptr}; // Level 1: Sub-commands
+static const char  *set_cmd_compo_1_1[] = {"", nullptr};  // Level 2: 'log' (handled by spec_idx 1)
+static const char **set_cmd_compos[] = {
+    set_cmd_compo_1,   // Root of the 'set' command
+    set_cmd_compo_1_1, // 'set log' path
+};
+#endif
 
 static const cmd_comp_t set_cmd_comp = {
     .name = "set",
@@ -458,9 +468,13 @@ static const cmd_comp_t set_cmd_comp = {
  * - Vertical: Level 2 provides arguments for Level 1 sub-commands.
  * - Note: Level 3 (options) and Specs are indexed via action_idx calculation.
  */
-static const char  *show_cmd_compo_1[] = {"stats", "config", "version", "domains", "entities", "levels", nullptr};
-static const char  *show_cmd_compo_1_1[] = {"log", "sys", "task", nullptr};      // 'show stats ...'
-static const char  *show_cmd_compo_1_2[] = {"", "short", "sim", "log", nullptr}; // 'show config ...'
+static const char *show_cmd_compo_1[] = {"stats", "config", "version", "domains", "entities", "levels", nullptr};
+static const char *show_cmd_compo_1_1[] = {"log", "sys", "task", nullptr}; // 'show stats ...'
+#ifdef ENABLE_RTOS
+static const char *show_cmd_compo_1_2[] = {"", "short", "sim", "log", nullptr}; // 'show config ...'
+#else
+static const char *show_cmd_compo_1_2[] = {"", "short", "log", nullptr}; // 'show config ...'
+#endif
 static const char **show_cmd_compos[] = {
     show_cmd_compo_1,   // Root Level 1 options for the 'show' command
     show_cmd_compo_1_1, // Sub-args for 'stats'
@@ -476,11 +490,17 @@ static const char **show_cmd_compos[] = {
  * Matches 1D action index to a list of optional terminal arguments.
  */
 static const char *options_stats_log[] = {"clear", nullptr};
+#ifdef ENABLE_RTOS
 static const char *options_config_sim[] = {"default", "current", nullptr};
 static comp_opt_t  show_options[] = {
     {0, options_stats_log }, // Maps to 'show stats log [clear]'
     {5, options_config_sim}, // Maps to 'show config sim [default|current]'
 };
+#else
+static comp_opt_t show_options[] = {
+    {0, options_stats_log}, // Maps to 'show stats log [clear]'
+};
+#endif
 
 /**
  * @brief Cumulative Offset Map for 'show' command hierarchy.
@@ -707,6 +727,8 @@ void show_cmd_completion(EmbeddedCli *cli, const char *token, uint8_t pos)
 
 void cmd_args_dispatch(EmbeddedCli *cli, char *args, int count, const cmd_comp_desc_t *desc)
 {
+    cmd_in_test_mode(cli);
+
     bool help = false;
     if (count == 0) {
         do_help(cli, desc->comp.level1, true, desc->comp.name);
@@ -1096,6 +1118,8 @@ void on_set_command(EmbeddedCli *cli, char *args, void *context)
 
     const char *arg = (count > 0) ? embeddedCliGetToken(args, 1) : nullptr;
 
+    cmd_in_test_mode(cli);
+
     if (count == 0 || (arg && strcmp(arg, "?") == 0)) {
         do_help(cli, set_cmd_comp.level1, true, "set");
         return;
@@ -1120,17 +1144,8 @@ void set_system_commands(EmbeddedCli *cli)
     embeddedCliAddBinding(
         cli,
         (CliCommandBinding){
-            .name = "back",
-            .help = "Back to previous menu",
-            .binding = on_back, // on going back
-        }
-    );
-    embeddedCliAddBinding(
-        cli,
-        (CliCommandBinding){
             .name = "show",
-            .help = "Show status",
-            .tokenizeArgs = true,
+            .flags = BINDING_FLAG_TOKENIZE_ARGS | BINDING_FLAG_HAS_HELP | BINDING_FLAG_WIDE,
             .binding = on_show_command, // on show command
         }
     );
@@ -1139,8 +1154,7 @@ void set_system_commands(EmbeddedCli *cli)
         cli,
         (CliCommandBinding){
             .name = "set",
-            .help = "Set value",
-            .tokenizeArgs = true,
+            .flags = BINDING_FLAG_TOKENIZE_ARGS | BINDING_FLAG_HAS_HELP | BINDING_FLAG_WIDE,
             .binding = on_set_command, // on set command
         }
     );
@@ -1150,7 +1164,7 @@ void set_system_commands(EmbeddedCli *cli)
         cli,
         (CliCommandBinding){
             .name = "start",
-            .help = "Start HW Simulation",
+            .flags = BINDING_FLAG_WIDE,
             .binding = on_start_hw_sim, // on starting HW simulation
         }
     );
@@ -1158,7 +1172,7 @@ void set_system_commands(EmbeddedCli *cli)
         cli,
         (CliCommandBinding){
             .name = "end",
-            .help = "End HW Simulation",
+            .flags = BINDING_FLAG_WIDE,
             .binding = on_end_hw_sim, // on ending HW simulation
         }
     );
@@ -1166,7 +1180,7 @@ void set_system_commands(EmbeddedCli *cli)
         cli,
         (CliCommandBinding){
             .name = "pause",
-            .help = "Pause HW Simulation",
+            .flags = BINDING_FLAG_WIDE,
             .binding = on_pause, // on pausing
         }
     );
@@ -1174,7 +1188,7 @@ void set_system_commands(EmbeddedCli *cli)
         cli,
         (CliCommandBinding){
             .name = "resume",
-            .help = "Resume HW Simulation",
+            .flags = BINDING_FLAG_WIDE,
             .binding = on_resume, // on resuming
         }
     );

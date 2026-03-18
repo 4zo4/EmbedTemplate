@@ -90,6 +90,8 @@ else()
 endif()
 if(RTOS)
     target_compile_definitions(cli_lib PRIVATE ENABLE_RTOS)
+else()
+    target_sources(cli_lib PRIVATE ${THIS_DIR}/src/cli/cli_no_sim.c)
 endif()
 
 # CLI uses embedded cli lib

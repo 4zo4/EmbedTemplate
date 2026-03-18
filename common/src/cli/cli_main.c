@@ -1,4 +1,3 @@
-
 /**
  * @file cli_main.c
  * @brief CLI core implementation.
@@ -51,21 +50,40 @@ cli_data_t cli_data = {
     .msg_buf = {0},
     .mode = MAIN,
     .test = MAX_BLOCK_INDEX,
-    .write_enable = true,
-    .no_error = false,
+    // clang-format off
+    .flags = (cli_flags_t){
+        .write_enable = true,
+        .no_error = false,
+        .cmd_run = false,
+    },
+    // clang-format oon
 };
 
 #ifdef ENABLE_TEST
-#define CLI_MAX_BINDINGS (MAX_BINDINGS / 2)
+#define CLI_MAX_BINDINGS MAX_BINDINGS
 #define CLI_MEM_SIZE 4096
+#define MAP_APP_CONTEXT 0x3
+#define NUM_APP_CONTEXT 4
 #else
-#define CLI_MAX_BINDINGS 10
+#define CLI_MAX_BINDINGS 12
 #define CLI_MEM_SIZE 1024
+#define MAP_APP_CONTEXT 0x1
+#define NUM_APP_CONTEXT 1
 #endif
 static alignas(8) uint64_t cli_mem[CLI_MEM_SIZE / sizeof(uint64_t)];
 static struct termios orig_termios;
 
 // -- End of globals --
+
+// global commands need a new line in test menu and write output enabled
+void cmd_in_test_mode(EmbeddedCli *cli)
+{
+    if (cli_data.mode >= TEST) {
+        cli_data.flags.cmd_run = true;
+        cli_data.flags.write_enable = true;
+        embeddedCliPrint(cli, "");
+    }
+}
 
 void set_msg(const char *msg)
 {
@@ -84,16 +102,16 @@ void print_msg(EmbeddedCli *cli)
 void clear_msg(void)
 {
     cli_data.msg_buf[0] = '\0';
-    cli_data.no_error = true;
+    cli_data.flags.no_error = true;
 }
 
 void on_back(EmbeddedCli *cli, char *args, void *context)
 {
     (void)args;
     (void)context;
-    cli_data.no_error = true;
-    cli_data.write_enable = true;
-
+    cli_data.flags.no_error = true;
+    cli_data.flags.write_enable = true;
+    embeddedCliSetContext(nullptr, 0, 0);
 #ifdef ENABLE_TEST
     if (cli_data.mode == TEST_DEV && cli_data.test != MAX_BLOCK_INDEX) {
         cli_data.test = MAX_BLOCK_INDEX;
@@ -117,8 +135,8 @@ void on_quit(EmbeddedCli *cli, char *args, void *context)
     (void)cli;
     (void)args;
     (void)context;
-    cli_data.write_enable = false; // disable further CLI output as we are exiting
-    cli_data.no_error = true;
+    cli_data.flags.no_error = true;
+    cli_data.flags.write_enable = false; // disable further CLI output as we are exiting
     keep_running = false;
     printf("\r" TERM_CURSOR_UP TERM_CLEAR_LINE TERM_CURSOR_UP TERM_CLEAR_LINE TERM_CURSOR_UP TERM_CLEAR_LINE
            "Terminated\n");
@@ -128,11 +146,20 @@ void on_quit(EmbeddedCli *cli, char *args, void *context)
 
 void set_main_commands(EmbeddedCli *cli)
 {
+    uint16_t bid;
+    embeddedCliAddBinding(
+        cli,
+        (CliCommandBinding){
+            .name = "back",
+            .flags = BINDING_FLAG_WIDE,
+            .binding = on_back, // on going back
+        }
+    );
     embeddedCliAddBinding(
         cli,
         (CliCommandBinding){
             .name = "quit",
-            .help = "Exit",
+            .flags = BINDING_FLAG_WIDE,
             .binding = on_quit, // on quiting
         }
     );
@@ -140,33 +167,25 @@ void set_main_commands(EmbeddedCli *cli)
         cli,
         (CliCommandBinding){
             .name = "q",
-            .help = "Alias for quit",
+            .flags = BINDING_FLAG_HIDDEN | BINDING_FLAG_WIDE,
             .binding = on_quit, //  on quiting
         }
     );
-#ifdef ENABLE_TEST
-    embeddedCliAddBinding(
-        cli,
-        (CliCommandBinding){
-            .name = "test",
-            .help = "Enter the Test menu",
-            .binding = on_test_menu, // on entering test menu
-        }
-    );
-#endif
-    embeddedCliAddBinding(
+    bid = embeddedCliAddBinding(
         cli,
         (CliCommandBinding){
             .name = "system",
-            .help = "Enter the System menu",
+            .flags = BINDING_FLAG_HIDDEN,
             .binding = on_system_menu, // on entering system menu
         }
     );
+    cli_data.bindings[0] = bid;
 }
 
 void show_main_menu(EmbeddedCli *cli)
 {
     cli_clear_menu_region();
+    embeddedCliSetAppContext(MAP_APP_CONTEXT);
     const char *msg = "\nAvailable Modes:\r\n"
 #ifdef ENABLE_TEST
                       " test - Enter Test Menu\r\n"
@@ -181,7 +200,7 @@ void show_main_menu(EmbeddedCli *cli)
 void writeChar(EmbeddedCli *cli, char c)
 {
     (void)cli;
-    if (cli_data.write_enable) {
+    if (cli_data.flags.write_enable) {
         putchar(c);
         fflush(stdout);
     }
@@ -315,7 +334,7 @@ void log_formatter(uint8_t domain, uint8_t entity, uint8_t level, uint64_t ts, c
 void process_logs(void)
 {
     // If the UI is currently "muted" for a refresh, wait to flush logs
-    if (!cli_data.write_enable || !log_is_dirty())
+    if (!cli_data.flags.write_enable || !log_is_dirty())
         return;
 
     log_flash(log_formatter);
@@ -343,7 +362,7 @@ int cli_init(void **cli_ctx)
     EmbeddedCliConfig *config = embeddedCliDefaultConfig();
 
     config->maxBindingCount = CLI_MAX_BINDINGS;
-    config->enableAutoComplete = false;
+    // config->enableAutoComplete = false;
     config->cliBuffer = cli_mem;
     config->cliBufferSize = CLI_MEM_SIZE;
 
@@ -366,13 +385,21 @@ int cli_init(void **cli_ctx)
     cli_log_cmd_init();
     log_set_level(DOMAIN_SYS, ENTITY_CLI, LOG_LEVEL_ERROR);
 
+    int count = embeddedCliCheckBindingDuplicates(cli);
+    assert((count == 0) && "[ERROR] Duplicate bindings.");
+    count = embeddedCliCheckArgsCompletionDuplicates();
+    assert((count == 0) && "[ERROR] Duplicate argument completions.");
+
+    embeddedCliAddHelpAux(cmd_in_test_mode);
+    embeddedCliAddAppContext(cli_data.bindings, NUM_APP_CONTEXT);
+
     cli->writeChar = writeChar;
-    cli_data.write_enable = false;
+    cli_data.flags.write_enable = false;
     // Clear CLI initial state with fake 'Enter' pressed
     embeddedCliReceiveChar(cli, '\r');
     embeddedCliProcess(cli);
     // CLI can start writing
-    cli_data.write_enable = true;
+    cli_data.flags.write_enable = true;
     show_main_menu(cli);
     // write back the CLI context
     *cli_ctx = cli;
@@ -386,16 +413,22 @@ void cli_run_test(EmbeddedCli *cli)
     int        prev_block = cli_data.test;
     cli_mode_e prev_mode = (cli_mode_e)cli_data.mode;
 
-    cli_data.no_error = false;
-    cli_data.write_enable = false;
+    cli_data.flags.cmd_run = false;
+    cli_data.flags.no_error = false;
+    cli_data.flags.write_enable = false;
     embeddedCliReceiveChar(cli, '\r');
     embeddedCliProcess(cli);
-    cli_data.write_enable = true;
+    cli_data.flags.write_enable = true;
+
+    if (cli_data.flags.cmd_run) {
+        cli_data.flags.cmd_run = false;
+        return;
+    }
 
     // If mode and block haven't changed, the user likely typed an invalid command
     if (prev_mode == cli_data.mode && prev_block == cli_data.test) {
 
-        if (!cli_data.no_error && cli_data.msg_buf[0] == '\0') {
+        if (!cli_data.flags.no_error && cli_data.msg_buf[0] == '\0') {
             set_msg("[ERROR] Invalid selection");
         }
 
@@ -421,7 +454,7 @@ bool cli_run(void *cli_ctx)
     if (c == EOF)
         return false;
 
-    cli_data.write_enable = true;
+    cli_data.flags.write_enable = true;
     if (c == '\t') {
         LOG_CLI_DEBUG("[TAB] press");
         embeddedCliReceiveChar(cli, c);
@@ -430,7 +463,7 @@ bool cli_run(void *cli_ctx)
         LOG_CLI_DEBUG("[TAB] handling done");
     } else if (c == '\r' || c == '\n') {
         LOG_CLI_DEBUG("[ENTER] press");
-        if (cli_data.mode == TEST || cli_data.mode == TEST_DEV || cli_data.mode == TEST_SYS) {
+        if (cli_data.mode >= TEST) {
             cli_run_test(cli);
         } else {
             embeddedCliReceiveChar(cli, '\r');
