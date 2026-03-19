@@ -74,8 +74,11 @@ and for code development, install the pre-commit hook:
 - **TF-A C lib Port**: Integrated a lightweight, bare-metal optimized subset of the **ARM Trusted Firmware-A** (TF-A) standard C library for use across all components, including the FreeRTOS kernel. This port provides architecture-agnostic implementations of core APIs ensuring minimal binary footprint.
 
 ### Interactive CLI
-- **Reworked Embedded-CLI**: A customized, low-overhead interface for live system interaction, featuring an optimized **O(1) hashed autocomplete** lookup instead of the original linear `strcmp` loop. The design extends autocomplete support to command arguments and utilizes a **Look-Aside Buffer** (Shadow Index Map) to bypass linear searches. This implementation preserves a 50% load factor with minimal memory overhead via a segmented bitmap.
-- **Dynamic Control**: Start/Stop simulations, and trigger tests directly from the console.
+- **Reworked Embedded-CLI**: A high-performance, low-overhead interface for live system interaction, optimized for deterministic performance and memory efficiency.
+#### Key Enhancements
+- **O(1) Hashed Lookups**: Replaces linear string searches with a **Look-Aside Buffer** (Shadow Index Map) segmented bitmap, maintaining a 50% load factor for instant command and argument resolution.
+- **Tiered, Context-Aware Autocomplete**: Supports dynamic discovery prioritizing active application contexts.
+- **Zero-Copy Circular History**: Implements a ring buffer for command history, utilizing backward traversal and sequential duplicate suppression to eliminate `memmove` overhead.
 - **Static Allocation**: Zero-heap design ensuring reliability for bare-metal or RTOS environments.
 
 ### Diagnostic Logger
@@ -111,6 +114,6 @@ The simulation demonstrates GPIO-driven actuation of off-chip components. It man
 
 The simulation is Zero-Heap Architecture for deterministic performance in embedded environments.
 
-1. **Launch Simulation**: Enter `system` menu and type `start.`
+1. **Launch Simulation**: Type `start`
 2. **Monitor**: Watch `[SYS:SIM]` logs for real-time temperature telemetry, state changes, and Alarm triggers.
 3. **Filter**: Use `set log sys sim none` to silence simulation telemetry while running a driver test.
