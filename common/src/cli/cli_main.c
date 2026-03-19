@@ -158,17 +158,17 @@ void set_main_commands(EmbeddedCli *cli)
     embeddedCliAddBinding(
         cli,
         (CliCommandBinding){
-            .name = "quit",
-            .flags = BINDING_FLAG_WIDE,
-            .binding = on_quit, // on quiting
+            .name = "q",
+            .flags = BINDING_FLAG_HIDDEN | BINDING_FLAG_WIDE,
+            .binding = on_quit, //  on quiting
         }
     );
     embeddedCliAddBinding(
         cli,
         (CliCommandBinding){
-            .name = "q",
-            .flags = BINDING_FLAG_HIDDEN | BINDING_FLAG_WIDE,
-            .binding = on_quit, //  on quiting
+            .name = "quit",
+            .flags = BINDING_FLAG_WIDE,
+            .binding = on_quit, // on quiting
         }
     );
     bid = embeddedCliAddBinding(
