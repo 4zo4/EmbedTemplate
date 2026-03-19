@@ -98,6 +98,21 @@ static uint8_t   level_map[LOG_LEVEL_MAP_SIZE];
 static name_id_t level_tbl[NUM_LOG_LEVELS];
 static int       level_id[NUM_LOG_LEVELS] = {LOG_LEVEL_NONE, LOG_LEVEL_CRITICAL, LOG_LEVEL_ERROR, LOG_LEVEL_WARNING, LOG_LEVEL_INFO, LOG_LEVEL_DEBUG};
 
+#define MAP_ALL_ENTITIES ((1U << MAX_ENTITY) - 1)
+#define MAP_ALL_DOMAINS ((1U << MAX_DOMAIN) - 1)
+
+#ifdef ENABLE_RTOS
+static uint16_t ent_map_en = MAP_ALL_ENTITIES;
+#else
+static uint16_t ent_map_en = (MAP_ALL_ENTITIES & ~(1U << ENTITY_SIM));
+#endif
+
+#ifdef ENABLE_TEST
+static uint16_t dom_map_en = MAP_ALL_DOMAINS;
+#else
+static uint16_t dom_map_en = (MAP_ALL_DOMAINS & ~(1U << DOMAIN_TEST));
+#endif
+
 // -- End of globals --
 
 void show_main_sys_menu(EmbeddedCli *cli)
@@ -239,7 +254,11 @@ void show_config_log(EmbeddedCli *cli, char *args, int count)
     bool            enabled = false;
 
     for (int did = 1; did < MAX_DOMAIN; did++) {
+        if (!(dom_map_en & BIT(did)))
+            continue;
         for (int eid = 0; eid < MAX_ENTITY; eid++) {
+            if (!(ent_map_en & BIT(eid)))
+                continue;
             int level = log_get_level(did, eid);
             if (level) {
                 if (!enabled)
@@ -274,6 +293,8 @@ void show_domains(EmbeddedCli *cli, char *args, int count)
     int  n = 8;
 
     for (int did = 1; did < MAX_DOMAIN; did++) {
+        if (!(dom_map_en & BIT(did)))
+            continue;
         n += snprintf(msg + n, sizeof(msg) - n, " %s", domain_name((uint8_t)did, 1));
     }
     embeddedCliPrint(cli, msg);
@@ -285,6 +306,8 @@ void show_entities(EmbeddedCli *cli, char *args, int count)
     int  n = 9;
 
     for (int eid = 1; eid < MAX_ENTITY; eid++) {
+        if (!(ent_map_en & BIT(eid)))
+            continue;
         n += snprintf(msg + n, sizeof(msg) - n, " %s", entity_name((uint8_t)eid, 1));
     }
     embeddedCliPrint(cli, msg);
@@ -331,11 +354,15 @@ void do_log_help(EmbeddedCli *cli, const char **matches, int count, uint8_t pos)
 
     if (pos == 2) {
         for (int i = 1; i < MAX_DOMAIN; i++) {
+            if (!(dom_map_en & BIT(i)))
+                continue;
             n += snprintf(msg + n, sizeof(msg) - n, "%s", domain_name((uint8_t)i, 0));
             msg[n++] = '|';
         }
     } else if (pos == 3) {
         for (int i = 0; i < MAX_ENTITY; i++) {
+            if (!(ent_map_en & BIT(i)))
+                continue;
             n += snprintf(msg + n, sizeof(msg) - n, "%s", entity_name((uint8_t)i, 0));
             msg[n++] = '|';
         }
@@ -379,6 +406,8 @@ void set_log_completion(EmbeddedCli *cli, const char *token, uint8_t pos)
 
     if (pos == 2) {
         for (int did = 1; did < MAX_DOMAIN; did++) {
+            if (!(dom_map_en & BIT(did)))
+                continue;
             if (count == 8)
                 break;
             match = domain_name((uint8_t)did, 0);
@@ -389,6 +418,8 @@ void set_log_completion(EmbeddedCli *cli, const char *token, uint8_t pos)
         }
     } else if (pos == 3) {
         for (int eid = 0; eid < MAX_ENTITY; eid++) {
+            if (!(ent_map_en & BIT(eid)))
+                continue;
             if (count == 8)
                 break;
             match = entity_name(eid, 0);
@@ -1045,11 +1076,15 @@ void cli_log_cmd_init(void)
     memset(level_map, MAP_EMPTY, sizeof(level_map));
 
     for (int did = 1; did < MAX_DOMAIN; did++) {
+        if (!(dom_map_en & BIT(did)))
+            continue;
         name = domain_name((uint8_t)did, 1);
         insert_name(name, did, TYPE_DOMAIN, did - 1);
     }
 
     for (int eid = 0; eid < MAX_ENTITY; eid++) {
+        if (!(ent_map_en & BIT(eid)))
+            continue;
         name = entity_name((uint8_t)eid, 1);
         insert_name(name, eid, TYPE_ENTITY, eid);
     }
