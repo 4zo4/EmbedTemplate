@@ -1090,13 +1090,13 @@ static int getAutocompletedCommand(EmbeddedCli *cli, const char **matches, const
     uint16_t map = 0;
 
     for (int n = 0; n < 2; n++) {
-        if (n) {
-            maxcount = wideBindingsCount;
-            bindingIdx = wideBindingsIdx;
-        } else {
+        if (n == 0) {
             maxcount = ctx->count;
             bindingIdx = ctx->base;
             map = ~(ctx->stride);
+        } else {
+            maxcount = wideBindingsCount;
+            bindingIdx = wideBindingsIdx;
         }
         for (int i = 0; i < maxcount; i++) {
             if (map & (1 << i))
@@ -1132,6 +1132,21 @@ static size_t getLongestCommonPrefix(const char **matches, int count) {
     return len;
 }
 
+/**
+ * @brief Main handler for Tab-completion requests.
+ * 
+ * Analyzes the current command buffer to determine the completion context:
+ * 1. Command Completion: If no spaces are present, it performs a Tiered search 
+ *    for primary commands, applying Longest Common Prefix (LCP) for partial 
+ *    matches or full completion for unique matches.
+ * 2. Argument Completion: If spaces are present, it extracts the primary command 
+ *    name and delegates completion logic to the specific 'onArgsCompletion' 
+ *    callback registered in the completion table.
+ * 3. Contextual Help: Detects a trailing '?' to trigger a help-specific request,
+ *    truncating the buffer before passing the request to the argument handler.
+ * 
+ * @param cli Pointer to the CLI instance.
+ */
 static void onAutocompleteRequest(EmbeddedCli *cli) {
     PREPARE_IMPL(cli);
 
