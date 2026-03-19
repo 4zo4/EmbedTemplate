@@ -5,6 +5,14 @@
 
 #include "embedded_cli.h"
 
+#if HISTORY_BUF_DEFAULT <= 128
+#define MAX_HISTORY_ITEMS 12
+#elif HISTORY_BUF_DEFAULT <= 256
+#define MAX_HISTORY_ITEMS 16
+#else
+#define MAX_HISTORY_ITEMS 24
+#endif
+
 #define CLI_TOKEN_NPOS 0xffff
 
 #ifndef UNUSED
@@ -82,28 +90,46 @@ struct FifoBuf {
 
 struct CliHistory {
     /**
-     * Items in buffer are separated by null-chars
+     * @brief Circular buffer for command history.
+     *
+     * Commands are stored as null-terminated strings. Because this is a
+     * circular buffer, strings may wrap around the end of the physical
+     * memory or be overwritten by newer entries.
      */
     char *buf;
 
     /**
-     * Total size of buffer
+     * @brief Total size of the buffer (MUST be a power of two).
      */
     uint16_t bufferSize;
 
     /**
-     * Index of currently selected element. This allows to navigate history
-     * After command is sent, current element is reset to 0 (no element)
+     * @brief Logical index of the currently selected history item.
+     *
+     * Used for Up/Down arrow navigation.
+     *  0: No history selected (empty/current line).
+     *  1 to itemsCount: History entries from newest to oldest.
      */
     uint16_t current;
 
     /**
-     * Number of items in buffer
-     * Items are counted from top to bottom (and are 1 based).
-     * So the most recent item is 1 and the oldest is itemCount.
+     * @brief Total number of valid command entries currently in the buffer.
+     *
+     * Items are accessed via 1-based indexing where 1 is the most
+     * recent entry (at the 'head').
      */
     uint16_t itemsCount;
+
+    /**
+     * @brief Offset to the start of the most recent command string.
+     *
+     * Acts as the 'Entry Point' for history retrieval. All older items
+     * are found by scanning backwards from this index through the
+     * null-terminated strings.
+     */
+    uint16_t head;
 };
+
 
 struct EmbeddedCliImpl {
     /**
@@ -340,14 +366,20 @@ static char fifoBufPop(FifoBuf *buffer);
 static bool fifoBufPush(FifoBuf *buffer, char a);
 
 /**
- * Copy provided string to the history buffer.
- * If it is already inside history, it will be removed from it and added again.
- * So after addition, it will always be on top
- * If available size is not enough (and total size is enough) old elements will
- * be removed from history so this item can be put to it
- * @param history
- * @param str
- * @return true if string was put in history
+ * @brief Adds a command string to the circular history buffer.
+ *
+ * 1. Checks if the new string is identical to the most recent entry (Item 1).
+ *    If so, it skips insertion to prevent redundant sequential duplicates.
+ * 2. Advances the 'head' pointer.
+ * 3. Overwrites oldest data in the ring buffer as the head cycles around.
+ *
+ * After successful insertion, the new item becomes Item 1 (top of history),
+ * and the 'current' navigation index is reset to 0.
+ *
+ * @param history Pointer to the CliHistory structure.
+ * @param str     Null-terminated string to store.
+ * @return true   If the string was stored or skipped as a sequential duplicate.
+ * @return false  If the string is longer than the total buffer size.
  */
 static bool historyPut(CliHistory *history, const char *str);
 
@@ -355,18 +387,10 @@ static bool historyPut(CliHistory *history, const char *str);
  * Get item from history. Items are counted from 1 so if item is 0 or greater
  * than itemCount, NULL is returned
  * @param history
- * @param item
+ * @param index
  * @return true if string was put in history
  */
-static const char *historyGet(CliHistory *history, uint16_t item);
-
-/**
- * Remove specific item from history
- * @param history
- * @param str - string to remove
- * @return
- */
-static void historyRemove(CliHistory *history, const char *str);
+static const char *historyGet(CliHistory *history, uint16_t index);
 
 /**
  * Return position (index of first char) of specified token
@@ -447,10 +471,10 @@ static helper_t cliHelpAux;
 EmbeddedCliConfig *embeddedCliDefaultConfig(void) {
     defaultConfig.rxBufferSize = 64;
     defaultConfig.cmdBufferSize = 64;
-    defaultConfig.historyBufferSize = 128;
+    defaultConfig.historyBufferSize = 256;
     defaultConfig.cliBuffer = NULL;
     defaultConfig.cliBufferSize = 0;
-    defaultConfig.maxBindingCount = 8;
+    defaultConfig.maxBindingCount = 16;
     defaultConfig.invitation = "> ";
     return &defaultConfig;
 }
@@ -464,18 +488,25 @@ uint16_t embeddedCliRequiredSize(EmbeddedCliConfig *config) {
         ALIGN_UP(config->rxBufferSize, 8) +
         ALIGN_UP(config->cmdBufferSize + 8, 8) +
         ALIGN_UP(config->historyBufferSize, 8) +
-        ALIGN_UP(bindingsCount * sizeof(CliCommandBinding), 8);
+        ALIGN_UP(bindingsCount * sizeof(CliCommandBinding), 8) +
+        ALIGN_UP(config->historyBufferSize, 8);
 
     return (uint16_t) totalBytes;
 }
 
+#define MOVE_BUF(size) buf += BYTES_TO_CLI_UINTS(ALIGN_UP(size, 8))
 EmbeddedCli *embeddedCliNew(EmbeddedCliConfig *config) {
     EmbeddedCli *cli = NULL;
 
     uint16_t bindingsCount = (uint16_t) (config->maxBindingCount + CLI_INTERNAL_BINDING_COUNT);
 
     size_t totalSize = embeddedCliRequiredSize(config);
-    totalSize = ALIGN_UP(totalSize, 8); 
+    totalSize = ALIGN_UP(totalSize, 8);
+
+    if ((config->historyBufferSize == 0) ||
+        (config->historyBufferSize & (config->historyBufferSize - 1)) != 0) {
+        return NULL; // Return null to prevent memory corruption
+    }
 
     bool allocated = false;
     if (config->cliBuffer == NULL) {
@@ -493,22 +524,24 @@ EmbeddedCli *embeddedCliNew(EmbeddedCliConfig *config) {
         memset(buf, 0, totalSize);
 
     cli = (EmbeddedCli *) buf;
-    buf += BYTES_TO_CLI_UINTS(ALIGN_UP(sizeof(EmbeddedCli), 8));
+    MOVE_BUF(sizeof(EmbeddedCli));
 
     cli->_impl = (EmbeddedCliImpl *) buf;
-    buf += BYTES_TO_CLI_UINTS(ALIGN_UP(sizeof(EmbeddedCliImpl), 8));
+    MOVE_BUF(sizeof(EmbeddedCliImpl));
 
     PREPARE_IMPL(cli);
     impl->rxBuffer.buf = (char *) buf;
-    buf += BYTES_TO_CLI_UINTS(ALIGN_UP(config->rxBufferSize * sizeof(char), 8));
+    MOVE_BUF(config->rxBufferSize);
 
     impl->cmdBuffer = (char *) buf;
-    buf += BYTES_TO_CLI_UINTS(ALIGN_UP(config->cmdBufferSize * sizeof(char) + 8, 8));
+    MOVE_BUF(config->cmdBufferSize + 8);
 
     impl->bindings = (CliCommandBinding *) buf;
-    buf += BYTES_TO_CLI_UINTS(ALIGN_UP(bindingsCount * sizeof(CliCommandBinding), 8));
+    MOVE_BUF(bindingsCount * sizeof(CliCommandBinding));
+
     impl->history.buf = (char *) buf;
     impl->history.bufferSize = config->historyBufferSize;
+    MOVE_BUF(config->historyBufferSize);
 
     if (allocated)
         SET_FLAG(impl->flags, CLI_FLAG_ALLOCATED);
@@ -565,8 +598,6 @@ void embeddedCliProcess(EmbeddedCli *cli) {
         } else if (isDisplayableChar(c)) {
             onCharInput(cli, c);
         }
-
-        //printLiveAutocompletion(cli);
 
         impl->lastChar = c;
     }
@@ -726,32 +757,41 @@ uint16_t embeddedCliGetTokenCount(const char *tokenizedStr) {
 
 static void navigateHistory(EmbeddedCli *cli, bool navigateUp) {
     PREPARE_IMPL(cli);
-    if (impl->history.itemsCount == 0 ||
-        (navigateUp && impl->history.current == impl->history.itemsCount) ||
-        (!navigateUp && impl->history.current == 0))
+
+    if (impl->history.itemsCount == 0)
         return;
 
-    clearCurrentLine(cli);
+    // Boundary checks
+    if (navigateUp && impl->history.current >= impl->history.itemsCount)
+        return;
+    if (!navigateUp && impl->history.current == 0)
+        return;
 
+    if (navigateUp) {
+        impl->history.current++;
+    } else {
+        impl->history.current--;
+    }
+
+    clearCurrentLine(cli);
     writeToOutput(cli, impl->invitation);
 
-    if (navigateUp)
-        ++impl->history.current;
-    else
-        --impl->history.current;
+    const char *item = "";
+    if (impl->history.current > 0) {
+        item = historyGet(&impl->history, impl->history.current);
+        if (item == NULL)
+            item = "";
+    }
 
-    const char *item = historyGet(&impl->history, impl->history.current);
-    // simple way to handle empty command the same way as others
-    if (item == NULL)
-        item = "";
-    uint16_t len = (uint16_t) strlen(item);
-    memcpy(impl->cmdBuffer, item, ALIGN_UP(len, 8));
+    uint16_t len = (uint16_t)strlen(item);
+
+    memcpy(impl->cmdBuffer, item, len);
     impl->cmdBuffer[len] = '\0';
     impl->cmdSize = len;
 
     writeToOutput(cli, impl->cmdBuffer);
     impl->inputLineLength = impl->cmdSize;
-    impl->cursorPos = 0;
+    impl->cursorPos = impl->cmdSize;
 }
 
 static void onEscapedInput(EmbeddedCli *cli, char c) {
@@ -1286,74 +1326,65 @@ static bool fifoBufPush(FifoBuf *buffer, char a) {
 
 static bool historyPut(CliHistory *history, const char *str) {
     size_t len = strlen(str);
-    // each item is ended with \0 so, need to have that much space at least
-    if (history->bufferSize < len + 1)
+    size_t required = len + 1;
+    uint16_t mask = history->bufferSize - 1;
+
+    if (required > history->bufferSize)
         return false;
 
-    // remove str from history (if it's present) so we don't get duplicates
-    historyRemove(history, str);
-
-    size_t usedSize;
-    // remove old items if new one can't fit into buffer
-    while (history->itemsCount > 0) {
-        const char *item = historyGet(history, history->itemsCount);
-        size_t itemLen = strlen(item);
-        usedSize = ((size_t) (item - history->buf)) + itemLen + 1;
-
-        size_t freeSpace = history->bufferSize - usedSize;
-
-        if (freeSpace >= len + 1)
-            break;
-
-        // space not enough, remove last element
-        --history->itemsCount;
-    }
     if (history->itemsCount > 0) {
-        // when history not empty, shift elements so new item is first
-        memmove(&history->buf[len + 1], history->buf, usedSize);
+        const char *newest = historyGet(history, 1);
+        if (newest && strcmp(newest, str) == 0) {
+            history->current = 0; // Reset navigation
+            return true;
+        }
     }
-    memcpy(history->buf, str, len + 1);
-    ++history->itemsCount;
 
+    uint16_t prevLen = (history->itemsCount > 0) ? (uint16_t)strlen(historyGet(history, 1)) + 1 : 0;
+    history->head = (history->head + prevLen) & mask;
+
+    memcpy(&history->buf[history->head], str, len);
+    history->buf[history->head + len] = '\0';
+
+    if (history->itemsCount < MAX_HISTORY_ITEMS) {
+        history->itemsCount++;
+    }
+
+    history->current = 0;
     return true;
 }
 
-static const char *historyGet(CliHistory *history, uint16_t item) {
-    if (item == 0 || item > history->itemsCount)
+const char* historyGet(CliHistory *history, uint16_t index) {
+    if (index == 0 || index > history->itemsCount)
         return NULL;
 
-    // items are stored in the same way (separated by \0 and counted from 1),
-    // so can use this call
-    return embeddedCliGetToken(history->buf, item);
-}
+    const uint16_t mask = history->bufferSize - 1;
+    uint16_t pos = history->head;
 
-static void historyRemove(CliHistory *history, const char *str) {
-    if (str == NULL || history->itemsCount == 0)
-        return;
-    char *item = NULL;
-    uint16_t itemPosition;
-    for (itemPosition = 1; itemPosition <= history->itemsCount; ++itemPosition) {
-        // items are stored in the same way (separated by \0 and counted from 1),
-        // so can use this call
-        item = embeddedCliGetTokenVariable(history->buf, itemPosition);
-        if (strcmp(item, str) == 0) {
-            break;
+    if (index == 1)
+        return &history->buf[pos];
+
+    for (uint16_t i = 1; i < index; i++) {
+        pos = (pos - 1) & mask;
+
+        while (history->buf[pos] != '\0') {
+            pos = (pos - 1) & mask;
+            if (pos == history->head)
+                return NULL;
         }
-        item = NULL;
-    }
-    if (item == NULL)
-        return;
 
-    --history->itemsCount;
-    if (itemPosition == (history->itemsCount + 1)) {
-        // if this is a last element, nothing is remaining to move
-        return;
+        uint16_t endOfTarget = pos;
+        pos = (pos - 1) & mask;
+        while (history->buf[pos] != '\0') {
+            pos = (pos - 1) & mask;
+            if (pos == endOfTarget)
+                break;
+        }
+
+        pos = (pos + 1) & mask;
     }
 
-    size_t len = strlen(item);
-    size_t remaining = (size_t) (history->bufferSize - (item + len + 1 - history->buf));
-    // move everything to the right of found item
-    memmove(item, &item[len + 1], remaining);
+    return &history->buf[pos];
 }
 
 static uint16_t getTokenPosition(const char *tokenizedStr, uint16_t pos) {

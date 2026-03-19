@@ -34,6 +34,12 @@ extern "C" {
 #define MAX_BINDINGS 48
 #define MAX_ARGS_COMPLETIONS 8
 
+// history buffer size must be power of two
+#define HISTORY_BUF_SMALL  128
+#define HISTORY_BUF_MEDIUM 256
+#define HISTORY_BUF_LARGE  512
+#define HISTORY_BUF_DEFAULT HISTORY_BUF_MEDIUM
+
 #define BINDING_INVALID 0xFFFF
 #define BINDING_FLAG_HIDDEN (1u << 8) // Exclude from help and autocomplete
 #define BINDING_FLAG_TOKENIZE_ARGS (1u << 9) // Tokenize command arguments before calling binding function
