@@ -50,11 +50,6 @@
 #define CLI_FLAG_DIRECT_PRINT 0x10u
 
 /**
- * Indicates that live autocompletion is enabled
- */
-//#define CLI_FLAG_AUTOCOMPLETE_ENABLED 0x20u
-
-/**
 * Indicates that cursor direction should be forward
 */
 #define CURSOR_DIRECTION_FORWARD true
@@ -142,11 +137,6 @@ struct EmbeddedCliImpl {
 
     CliCommandBinding *bindings;
 
-    /**
-     * Flags for each binding. Sizes are the same as for bindings array
-     */
-    //uint16_t *bindingsFlags;
-
     uint16_t bindingsCount;
 
     uint16_t maxBindingsCount;
@@ -172,28 +162,6 @@ struct EmbeddedCliImpl {
      * 0 = end of command
      */
     uint16_t cursorPos;
-};
-
-struct AutocompletedCommand {
-    /**
-     * Name of autocompleted command (or first candidate for autocompletion if
-     * there are multiple candidates).
-     * NULL if autocomplete not possible.
-     */
-    const char *firstCandidate;
-
-    /**
-     * Number of characters that can be completed safely. For example, if there
-     * are two possible commands "get-led" and "get-adc", then for prefix "g"
-     * autocompletedLen will be 4. If there are only one candidate, this number
-     * is always equal to length of the command.
-     */
-    uint16_t autocompletedLen;
-
-    /**
-     * Total number of candidates for autocompletion
-     */
-    uint16_t candidateCount;
 };
 
 static EmbeddedCliConfig defaultConfig;
@@ -291,12 +259,12 @@ static void helpWithUse(EmbeddedCli *cli, const char **matches, int count);
 static void onUnknownCommand(EmbeddedCli *cli, const char *name);
 
 /**
- * Return autocompleted command for given prefix.
- * Prefix is compared to all known command bindings and autocompleted result
- * is returned
+ * Get autocompleted commands for given prefix.
+ * Prefix is compared to known command bindings and autocompleted result
+ * is returned in 'matches' array.
  * @param cli
  * @param prefix
- * @return
+ * @return number of matches
  */
 static int getAutocompletedCommand(EmbeddedCli *cli, const char **matches, const char *prefix);
 
@@ -994,8 +962,7 @@ static void helpWithUse(EmbeddedCli *cli, const char **matches, int count) {
     int n = 5;
     const char *sep = "";
     bool after_1st_word = false;
-    if (cliHelpAux)
-        cliHelpAux(cli);
+
     for (int i = 0; i < count; i++) {
         if (matches[i][0] == '\0')
             continue;
@@ -1075,6 +1042,20 @@ static inline const char *getNameFromContext(EmbeddedCliContext *ctx, int i) {
     return *(const char **)((uint8_t *)ctx->base + (i * ctx->stride));
 }
 
+/**
+ * @brief Performs prioritized autocompletion search for the current prefix.
+ * 
+ * Implements a hierarchical search to find up to 8 command matches:
+ * 1. Primary Context: Scans the dynamic 'EmbeddedCliContext' (e.g., current test names).
+ * 2. Application Context: Scans the 'App Context' index list, applying a bitmask (stride) 
+ *    to filter out commands that are disabled in the current menu state.
+ * 3. Global/Wide Context: If no matches in App Context, scans 'wideBindingsIdx' (e.g., help, quit).
+ * 
+ * @param cli      Pointer to the CLI instance.
+ * @param matches  Array to be populated with pointers to matching command strings.
+ * @param prefix   The current partial string typed by the user.
+ * @return         The number of matches found (capped at 8).
+ */
 static int getAutocompletedCommand(EmbeddedCli *cli, const char **matches, const char *prefix) {
     size_t prefixLen = strlen(prefix);
     int count = 0;
@@ -1096,48 +1077,31 @@ static int getAutocompletedCommand(EmbeddedCli *cli, const char **matches, const
                 matches[count] = name;
                 count++;
             } else {
-                break;
+                return 8;
             }            
         }
     }
+
+    if (count > 0)
+        return count; 
 
     ctx = embeddedCliGetAppContext();
     const uint8_t *bindingIdx;
     uint16_t map = 0;
 
-    if (count == 0) {
-        for (int n = 0; n < 2; n++) {
-            if (n) {
-                maxcount = ctx->count;
-                bindingIdx = ctx->base;
-                map = ~(ctx->stride);
-            } else {
-                maxcount = wideBindingsCount;
-                bindingIdx = wideBindingsIdx;
-            }
-            for (int i = 0; i < maxcount; i++) {
-                if (map & (1 << i))
-                    continue;
-                int idx = bindingIdx[i];
-                name = getNameFromBindings(impl->bindings, idx);
-                if (strncmp(name, prefix, prefixLen) == 0) {
-                    if (count < 8) {
-                        matches[count] = name;
-                        count++;
-                    } else {
-                        break;
-                    }
-                }
-            }
+    for (int n = 0; n < 2; n++) {
+        if (n) {
+            maxcount = wideBindingsCount;
+            bindingIdx = wideBindingsIdx;
+        } else {
+            maxcount = ctx->count;
+            bindingIdx = ctx->base;
+            map = ~(ctx->stride);
         }
-    }
-
-    if (count == 0) {
-        maxcount = impl->bindingsCount;
         for (int i = 0; i < maxcount; i++) {
-            if (IS_FLAG_SET(impl->bindings[i].flags, BINDING_FLAG_DIGIT))
+            if (map & (1 << i))
                 continue;
-            name = getNameFromBindings(impl->bindings, i);
+            name = getNameFromBindings(impl->bindings, bindingIdx[i]);
             if (strncmp(name, prefix, prefixLen) == 0) {
                 if (count < 8) {
                     matches[count] = name;
@@ -1149,6 +1113,23 @@ static int getAutocompletedCommand(EmbeddedCli *cli, const char **matches, const
         }
     }
     return count;
+}
+
+/**
+ * @brief Finds the length of the common prefix among a set of strings.
+ */
+static size_t getLongestCommonPrefix(const char **matches, int count) {
+    size_t len = 0;
+    while (matches[0][len] != '\0') {
+        char c = matches[0][len];
+        for (int i = 1; i < count; i++) {
+            if (matches[i][len] != c) {
+                return len;
+            }
+        }
+        len++;
+    }
+    return len;
 }
 
 static void onAutocompleteRequest(EmbeddedCli *cli) {
@@ -1178,6 +1159,14 @@ static void onAutocompleteRequest(EmbeddedCli *cli) {
         if (count == 1) {
             embeddedCliCompletion(cli, matches[0]);
         } else if (count > 1) {
+            size_t lcp = getLongestCommonPrefix(matches, count);
+            size_t len = strlen(impl->cmdBuffer);
+
+            if (lcp > len) {
+                memcpy(impl->cmdBuffer, matches[0], lcp);
+                impl->cmdSize = (uint16_t)lcp;
+                impl->cmdBuffer[lcp] = '\0';
+            }
             helpWithUse(cli, matches, count);
         }
         embeddedCliRefresh(cli);
