@@ -1097,6 +1097,7 @@ static int getAutocompletedCommand(EmbeddedCli *cli, const char **matches, const
         } else {
             maxcount = wideBindingsCount;
             bindingIdx = wideBindingsIdx;
+            map = 0;
         }
         for (int i = 0; i < maxcount; i++) {
             if (map & (1 << i))
