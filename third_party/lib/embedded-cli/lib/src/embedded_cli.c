@@ -440,7 +440,7 @@ static uint32_t inuseCompletion[COMPLETION_ARRAY_SIZE];
 static ArgsCompletion completionTable[MAX_ARGS_COMPLETIONS];
 static int completionsCount = 0;
 
-#define BINDING_MAP_SIZE    POW2(2 * (MAX_BINDINGS + CLI_INTERNAL_BINDING_COUNT))
+#define BINDING_MAP_SIZE    POW2(2 * MAX_BINDINGS)
 #define BINDING_MAP_MASK    (BINDING_MAP_SIZE - 1)
 #define BINDING_ARRAY_SIZE  BITMAP_ARRAY_SIZE(BINDING_MAP_SIZE)
 
@@ -471,10 +471,10 @@ static helper_t cliHelpAux;
 EmbeddedCliConfig *embeddedCliDefaultConfig(void) {
     defaultConfig.rxBufferSize = 64;
     defaultConfig.cmdBufferSize = 64;
-    defaultConfig.historyBufferSize = 256;
+    defaultConfig.historyBufferSize = HISTORY_BUF_DEFAULT;
     defaultConfig.cliBuffer = NULL;
     defaultConfig.cliBufferSize = 0;
-    defaultConfig.maxBindingCount = 16;
+    defaultConfig.maxBindingCount = MAX_BINDINGS - CLI_INTERNAL_BINDING_COUNT;
     defaultConfig.invitation = "> ";
     return &defaultConfig;
 }
@@ -505,6 +505,10 @@ EmbeddedCli *embeddedCliNew(EmbeddedCliConfig *config) {
 
     if ((config->historyBufferSize == 0) ||
         (config->historyBufferSize & (config->historyBufferSize - 1)) != 0) {
+        return NULL; // Return null to prevent memory corruption
+    }
+
+    if (config->maxBindingCount > MAX_BINDINGS) {
         return NULL; // Return null to prevent memory corruption
     }
 
