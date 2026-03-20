@@ -12,6 +12,7 @@
 
 #if defined(__GNUC__) || defined(__clang__)
 #define POW2(n) ((n) <= 1 ? 2 : 1u << (32 - __builtin_clz((n) - 1)))
+#define HIGHEST_BIT(mask) (31 - __builtin_clz(mask))
 #else
 #define POW2_B1(n) ((n) | ((n) >> 1))
 #define POW2_B2(n) (POW2_B1(n) | (POW2_B1(n) >> 2))

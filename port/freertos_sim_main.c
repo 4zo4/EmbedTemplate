@@ -348,13 +348,20 @@ int set_sim_cfg(int len, stream_t *cfg)
     if (len < 1 || cfg == nullptr)
         return -1;
 
-    int hdr = cfg[0].u8[0];
+    uint16_t oor_mask = 0;
+    int      hdr = cfg[0].u8[0];
+
+    if ((hdr == BIT(0)) && (len == 2))
+        goto next_pkt;
 
     if (hdr & BIT(1)) {
         uint16_t val = cfg[0].u8[1];
         if (val >= MIN_RAMP && val <= MAX_RAMP) {
             sim_ctx.phy.ramp_time_s = val;
             sim_ctx.mask |= BIT(1);
+        } else {
+            oor_mask |= BIT(1);
+            hdr &= ~BIT(1);
         }
     }
     if (hdr & BIT(2)) {
@@ -362,6 +369,9 @@ int set_sim_cfg(int len, stream_t *cfg)
         if (val >= MIN_MASS && val <= MAX_MASS) {
             sim_ctx.phy.thermal_mass = val;
             sim_ctx.mask |= BIT(2);
+        } else {
+            oor_mask |= BIT(2);
+            hdr &= ~BIT(2);
         }
     }
     if (hdr & BIT(3)) {
@@ -369,6 +379,9 @@ int set_sim_cfg(int len, stream_t *cfg)
         if (val >= MIN_COND && val <= MAX_COND) {
             sim_ctx.phy.board_conduct = val;
             sim_ctx.mask |= BIT(3);
+        } else {
+            oor_mask |= BIT(3);
+            hdr &= ~BIT(3);
         }
     }
     if (hdr & BIT(4)) {
@@ -376,6 +389,9 @@ int set_sim_cfg(int len, stream_t *cfg)
         if (val >= MIN_PWR && val <= MAX_PWR) {
             sim_ctx.phy.heater_power = val;
             sim_ctx.mask |= BIT(4);
+        } else {
+            oor_mask |= BIT(4);
+            hdr &= ~BIT(4);
         }
     }
 
@@ -398,8 +414,9 @@ int set_sim_cfg(int len, stream_t *cfg)
     }
 
     if (len == 1)
-        return 0;
+        return (int)oor_mask;
 
+next_pkt:
     hdr = cfg[1].u8[0];
 
     if (hdr & BIT(1)) {
@@ -407,6 +424,8 @@ int set_sim_cfg(int len, stream_t *cfg)
         if (val >= MIN_LAT && val <= MAX_LAT) {
             sim_ctx.phy.sensor_latency_ms = val;
             sim_ctx.mask |= BIT2(1);
+        } else {
+            oor_mask |= BIT2(1);
         }
     }
     if (hdr & BIT(2)) {
@@ -414,6 +433,8 @@ int set_sim_cfg(int len, stream_t *cfg)
         if (val >= MIN_TEMP_TARGET && val <= MAX_TEMP_TARGET) {
             sim_cfg.ctrl.temp_target = val;
             sim_cfg.mask |= BIT2(2);
+        } else {
+            oor_mask |= BIT2(2);
         }
     }
     if (hdr & BIT(3)) {
@@ -421,6 +442,8 @@ int set_sim_cfg(int len, stream_t *cfg)
         if (val >= MIN_TEMP_CRIT && val <= MAX_TEMP_CRIT) {
             sim_cfg.ctrl.temp_critical = val;
             sim_cfg.mask |= BIT2(3);
+        } else {
+            oor_mask |= BIT2(3);
         }
     }
     if (hdr & BIT(4)) {
@@ -428,6 +451,8 @@ int set_sim_cfg(int len, stream_t *cfg)
         if (val >= MIN_TEMP_COOL && val <= MAX_TEMP_COOL) {
             sim_cfg.ctrl.temp_cooldown = val;
             sim_cfg.mask |= BIT2(4);
+        } else {
+            oor_mask |= BIT2(4);
         }
     }
     if (hdr & BIT(5)) {
@@ -435,6 +460,8 @@ int set_sim_cfg(int len, stream_t *cfg)
         if (val >= MIN_TEMP_HYST && val <= MAX_TEMP_HYST) {
             sim_cfg.ctrl.temp_hysteresis = val;
             sim_cfg.mask |= BIT2(5);
+        } else {
+            oor_mask |= BIT2(5);
         }
     }
 
@@ -443,6 +470,8 @@ int set_sim_cfg(int len, stream_t *cfg)
         if (val >= MIN_AMB && val <= MAX_AMB) {
             sim_ctx.phy.ambient_temp_mC = val;
             sim_ctx.mask |= BIT2(6);
+        } else {
+            oor_mask |= BIT2(6);
         }
     }
 
@@ -452,19 +481,16 @@ int set_sim_cfg(int len, stream_t *cfg)
     if (sim_ctx.mask & BIT(0))
         recalculate_thermal_matrix();
 
-    return 0;
+    return (int)oor_mask;
 }
 
 /**
  * @brief Retrieves simulation configuration
  */
-int get_sim_cfg(int len, stream_t *cfg, bool cold)
+static int get_sim_cfg_set(stream_t *cfg, bool cold)
 {
     stream_t tmp;
     bool     inuse;
-
-    if (len < 2 || cfg == nullptr)
-        return -1;
 
     inuse = (sim_ctx.mask & BIT(0));
 
@@ -490,6 +516,49 @@ int get_sim_cfg(int len, stream_t *cfg, bool cold)
     cfg[1].all = tmp.all;
 
     return 8 + 8; // return number of bytes set
+}
+
+/**
+ * @brief Retrieves simulation configuration ranges (min or max)
+ */
+static int get_sim_cfg_ranges(stream_t *cfg, bool max)
+{
+    stream_t tmp;
+
+    tmp.u8[0] = 0xFF; // All PHY fields present
+    tmp.u8[1] = max ? (uint8_t)MAX_RAMP : (uint8_t)MIN_RAMP;
+    tmp.u16[1] = max ? MAX_MASS : MIN_MASS;
+    tmp.u16[2] = max ? MAX_COND : MIN_COND;
+    tmp.u16[3] = max ? MAX_PWR : MIN_PWR;
+    cfg[0].all = tmp.all;
+
+    tmp.all = 0;
+    tmp.u8[0] = 0x7E; // All TEMP fields present (Bit 0 = 0 to End)
+    tmp.u8[1] = max ? MAX_LAT : MIN_LAT;
+    tmp.u8[2] = max ? MAX_TEMP_TARGET : MIN_TEMP_TARGET;
+    tmp.u8[3] = max ? MAX_TEMP_CRIT : MIN_TEMP_CRIT;
+    tmp.u8[4] = max ? MAX_TEMP_COOL : MIN_TEMP_COOL;
+    tmp.u8[5] = max ? MAX_TEMP_HYST : MIN_TEMP_HYST;
+    tmp.u16[3] = (int16_t)(max ? MAX_AMB / 1000 : MIN_AMB / 1000);
+    cfg[1].all = tmp.all;
+
+    return 8 + 8; // return number of bytes set
+}
+
+int get_sim_cfg(int len, stream_t *cfg, int what)
+{
+    if (len < 2 || cfg == nullptr)
+        return -1;
+
+    // what: 0 = current, 1 = default
+    if (what < 2)
+        return get_sim_cfg_set(cfg, (bool)what);
+
+    // what: 2 = ranges (MIN), 3 = ranges (MAX)
+    else if (what < 4)
+        return get_sim_cfg_ranges(cfg, (bool)(what & 0x1));
+
+    return -1;
 }
 
 static void run_temperature_regulation(volatile gpio_ctrl_t *gpio)

@@ -26,7 +26,7 @@ bool sim_pause(void);
 void sim_resume(void);
 void cmd_in_test_mode(EmbeddedCli *cli);
 int  set_sim_cfg(int len, stream_t *cfg);
-int  get_sim_cfg(int len, stream_t *cfg, bool cold);
+int  get_sim_cfg(int len, stream_t *cfg, int what);
 
 const char *entity_name(uint8_t entity, bool cap);
 const char *domain_name(uint8_t domain, bool cap);
@@ -217,33 +217,78 @@ void show_config(EmbeddedCli *cli, char *args, int count)
 
 void show_config_sim(EmbeddedCli *cli, char *args, int count)
 {
-    stream_t pkt[2];
+    const char *opt = (count >= 3) ? embeddedCliGetToken(args, 3) : nullptr;
+    int         what = 0; // 'current'
 
-    const char *opt = (count == 3) ? embeddedCliGetToken(args, 3) : nullptr;
-    bool        cold = (opt && strcmp(opt, "default") == 0);
+    if (opt) {
+        if (strcmp(opt, "default") == 0)
+            what = 1;
+        else if (strcmp(opt, "ranges") == 0)
+            what = 2;
+    }
 
-    get_sim_cfg(2, pkt, cold);
+    alignas(8) char msg[256 + 8] = "Simulation config:";
 
-    char msg[256] = "Simulation config:";
+    if (what < 2) {
+        stream_t pkt[2];
+        get_sim_cfg(2, pkt, what);
 
-    // clang-format off
-    snprintf(msg + 18, sizeof(msg) - 18,
-        "\r\n Thermal Mass: %u J/°C, Conductance: %u mW/°C, Heater Power: %u mW"
-        "\r\n Ambient Temp: %d°C, Ramp Time: %u sec, Sensor latency: %u ms"
-        "\r\n Target Temp: %u°C, Critical Temp: %u°C"
-        "\r\n Cooldown Temp: %u°C, Hysteresis: %u°C",
-        pkt[0].u16[1], pkt[0].u16[2], pkt[0].u16[3], // Mass, Conduct, Power
-        (int16_t)pkt[1].u16[3], pkt[0].u8[1], pkt[1].u8[1], // Amb Temp, Ramp, Latency
-        pkt[1].u8[2],  pkt[1].u8[3],                 // Target, Critical Temp
-        pkt[1].u8[4],  pkt[1].u8[5]);                // Cooldown, Hysteresis
-    // clang-format on
+        // clang-format off
+        snprintf(msg + 18, sizeof(msg) - 18,
+            "\r\n Thermal Mass: %u J/°C, Conductance: %u mW/°C, Heater Power: %u mW"
+            "\r\n Ambient Temp: %d°C, Ramp Time: %u sec, Sensor latency: %u ms"
+            "\r\n Target Temp: %u°C, Critical Temp: %u°C"
+            "\r\n Cooldown Temp: %u°C, Hysteresis: %u°C",
+            pkt[0].u16[1], pkt[0].u16[2], pkt[0].u16[3],
+            (int16_t)pkt[1].u16[3], pkt[0].u8[1], pkt[1].u8[1],
+            pkt[1].u8[2], pkt[1].u8[3],
+            pkt[1].u8[4], pkt[1].u8[5]);
+        // clang-format on
+        embeddedCliPrint(cli, msg);
+    } else {
+        alignas(8) char tmp[128 + 8];
+        stream_t        p_min[2], p_max[2];
+        get_sim_cfg(2, p_min, 2);
+        get_sim_cfg(2, p_max, 3);
 
-    embeddedCliPrint(cli, msg);
+        int n = snprintf(msg, 256, "Simulation Arg Ranges:");
+
+        // clang-format off
+        struct { const char *name; int min; int max; const char *unit; } rows[] = {
+            {"Ramp Time", p_min[0].u8[1], p_max[0].u8[1], "sec"},
+            {"Thermal Mass", p_min[0].u16[1], p_max[0].u16[1], "J/°C"},
+            {"Conductance", p_min[0].u16[2], p_max[0].u16[2], "mW/°C"},
+            {"Heater Power", p_min[0].u16[3], p_max[0].u16[3], "mW"},
+            {"Ambient Temp", (int16_t)p_min[1].u16[3], (int16_t)p_max[1].u16[3], "°C"},
+            {"Sensor latency", p_min[1].u8[1], p_max[1].u8[1], "ms"},
+            {"Target Temp", p_min[1].u8[2], p_max[1].u8[2], "°C"},
+            {"Critical Temp",p_min[1].u8[3], p_max[1].u8[3], "°C"},
+            {"Cooldown Temp", p_min[1].u8[4], p_max[1].u8[4], "°C"},
+            {"Hysteresis", p_min[1].u8[5], p_max[1].u8[5], "°C"}
+        };
+        // clang-format on
+
+        for (int i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
+            int m = snprintf(tmp, 128, "\r\n %s: %d - %d %s", rows[i].name, rows[i].min, rows[i].max, rows[i].unit);
+
+            if (n + m < 256) {
+                memcpy(msg + n, tmp, ALIGN_UP(m, 8));
+                n += m;
+            } else {
+                msg[n] = '\0';
+                embeddedCliPrint(cli, msg);
+                memcpy(msg, tmp + 2, ALIGN_UP(m - 2, 8)); // skip leading \r\n
+                n = m - 2;
+            }
+        }
+        msg[n] = '\0';
+        embeddedCliPrint(cli, msg);
+    }
 }
 
 void show_config_short(EmbeddedCli *cli, char *args, int count)
 {
-    embeddedCliPrint(cli, "Short config");
+    embeddedCliPrint(cli, "Short config"); // placeholder
 }
 
 void show_config_log(EmbeddedCli *cli, char *args, int count)
@@ -522,10 +567,10 @@ static const char **show_cmd_compos[] = {
  */
 static const char *options_stats_log[] = {"clear", nullptr};
 #ifdef ENABLE_RTOS
-static const char *options_config_sim[] = {"default", "current", nullptr};
+static const char *options_config_sim[] = {"current", "default", "ranges", nullptr};
 static comp_opt_t  show_options[] = {
     {0, options_stats_log }, // Maps to 'show stats log [clear]'
-    {5, options_config_sim}, // Maps to 'show config sim [default|current]'
+    {5, options_config_sim}, // Maps to 'show config sim [current|default|ranges]'
 };
 #else
 static comp_opt_t show_options[] = {
@@ -561,7 +606,7 @@ static void (*show_action[])(EmbeddedCli *cli, char *args, int count) = {
 
     show_config,       // [3] show config (hybrid: leaf + path)
     show_config_short, // [4] show config short
-    show_config_sim,   // [5] show config sim [default|current]
+    show_config_sim,   // [5] show config sim [current|default|ranges]
     show_config_log,   // [6] show config log
 
     show_version,    // [7] show version
@@ -975,12 +1020,43 @@ static int find_name_id(const char *name, int type)
     return -1;
 }
 
+static void sim_cfg_print_oor(EmbeddedCli *cli, int ret)
+{
+    static const char *sim_cfg_names[] = {
+        "", "Ramp Time", "Thermal Mass", "Conductance", "Heater Power", "", "", "",                             // bits 0-7 (PHY)
+        "", "Sensor latency", "Target Temp", "Critical Temp", "Cooldown Temp", "Hysteresis", "Ambient Temp", "" // bits 8-15 (TEMP)
+    };
+
+    char      msg[192] = "[SKIP] Out of Range: ";
+    int       n = 21;
+    uint16_t  oor_mask = ret;
+    const int last_bit = HIGHEST_BIT(oor_mask);
+
+    for (int i = 1; i <= last_bit; i++) {
+        if (!(oor_mask & (1U << i)) || sim_cfg_names[i][0] == '\0')
+            continue;
+        int m = snprintf(msg + n, sizeof(msg) - n, "%s, ", sim_cfg_names[i]);
+        if (m > 0)
+            n += m;
+        if (n >= (int)sizeof(msg) - 1)
+            break;
+    }
+
+    if (n > 23) {
+        msg[n - 2] = '\0';
+        embeddedCliPrint(cli, msg);
+    }
+}
+
 void on_set_sim_command(EmbeddedCli *cli, char *args, int count)
 {
     const char *arg;
     bool        phy = false;
     bool        temp = false;
     bool        help = false;
+    int         ret = 0;
+    uint16_t    oor_mask = 0;
+    uint16_t    cfg_mask = 0;
 
     if (count < 3)
         help = true;
@@ -1019,23 +1095,31 @@ void on_set_sim_command(EmbeddedCli *cli, char *args, int count)
         for (int i = 0; i < 5 && (i + 3 <= count); i++) {
             arg = embeddedCliGetToken(args, i + 3);
             val = (uint16_t)atoi(arg);
-            if (val) {
+            if (val < 256) {
                 pkt[1].u8[i + 1] = val;
                 hdr |= BIT(i + 1);
+            } else if (val >= 256) {
+                oor_mask |= BIT2(i + 1);
             }
         }
+        cfg_mask = (uint16_t)hdr << 8;
         pkt[0].u8[0] = BIT(0); // add continue BIT(0)
         pkt[1].u8[0] = hdr;
-        set_sim_cfg(2, pkt);
-        embeddedCliPrint(cli, "Sim config set");
+        ret = set_sim_cfg(2, pkt) | oor_mask;
+        if (ret > 0)
+            sim_cfg_print_oor(cli, ret);
+        if ((cfg_mask & ~(uint16_t)ret) != 0)
+            embeddedCliPrint(cli, "Sim config set");
         return;
     }
 
     arg = embeddedCliGetToken(args, 3);
     val = (uint16_t)atoi(arg);
-    if (val) {
+    if (val < 256) {
         pkt[0].u8[1] = (uint8_t)val;
         hdr |= BIT(1);
+    } else {
+        oor_mask |= BIT(1);
     }
 
     for (int i = 1; i < 6 && (i + 3 <= count); i++) {
@@ -1047,6 +1131,7 @@ void on_set_sim_command(EmbeddedCli *cli, char *args, int count)
         }
     }
 
+    cfg_mask = (uint16_t)hdr;
     if (count == 7) {
         arg = embeddedCliGetToken(args, 7);
         val = (uint16_t)atoi(arg);
@@ -1058,13 +1143,17 @@ void on_set_sim_command(EmbeddedCli *cli, char *args, int count)
 
     if (count == 7) {
         hdr = BIT(6); // mark pkt[1].u16[3] field present
+        cfg_mask |= BIT2(6);
         pkt[1].u8[0] = hdr;
-        set_sim_cfg(2, pkt);
+        ret = set_sim_cfg(2, pkt);
     } else {
-        set_sim_cfg(1, pkt);
+        ret = set_sim_cfg(1, pkt);
     }
 
-    embeddedCliPrint(cli, "Sim config set");
+    if (ret > 0)
+        sim_cfg_print_oor(cli, ret);
+    if ((cfg_mask & ~(uint16_t)ret) != 0)
+        embeddedCliPrint(cli, "Sim config set");
 }
 
 void cli_log_cmd_init(void)
