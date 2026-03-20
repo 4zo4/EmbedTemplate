@@ -1331,7 +1331,6 @@ static bool fifoBufPush(FifoBuf *buffer, char a) {
 static bool historyPut(CliHistory *history, const char *str) {
     size_t len = strlen(str);
     size_t required = len + 1;
-    uint16_t mask = history->bufferSize - 1;
 
     if (required > history->bufferSize)
         return false;
@@ -1345,7 +1344,7 @@ static bool historyPut(CliHistory *history, const char *str) {
     }
 
     uint16_t prevLen = (history->itemsCount > 0) ? (uint16_t)strlen(historyGet(history, 1)) + 1 : 0;
-    history->head = (history->head + prevLen) & mask;
+    history->head = (history->head + prevLen) & (history->bufferSize - 1);
 
     memcpy(&history->buf[history->head], str, len);
     history->buf[history->head + len] = '\0';
