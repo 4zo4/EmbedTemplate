@@ -1244,14 +1244,10 @@ static void onAutocompleteRequest(EmbeddedCli *cli) {
 
     // Check is Help Request '?'
     bool isHelpRequest = (impl->cmdSize > 0 && impl->cmdBuffer[impl->cmdSize - 1] == '?');
-
+    
     if (isHelpRequest) {
         // Truncate the '?' from the buffer so the completion logic doesn't see it
         impl->cmdSize--;
-        if (impl->cmdSize > 0 && impl->cmdBuffer[impl->cmdSize - 1] == ' ') {
-            // Keep pos as is; we are looking for help on what comes AFTER the space
-            fragment = "";
-        }
         impl->cmdBuffer[impl->cmdSize] = '\0';
         impl->cursorPos = impl->cmdSize;
         impl->inputLineLength = impl->cmdSize;
