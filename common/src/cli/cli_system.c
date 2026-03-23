@@ -34,6 +34,7 @@ const char *level_name(uint8_t level, bool cap);
 
 static uint32_t cliHash(const char *str); // refer to embedded-cli/lib/src/embedded_cli.c
 
+typedef bool (*args_validate_t)(const char *token, uint8_t pos);
 typedef void (*args_comp_t)(EmbeddedCli *cli, const char *token, uint8_t pos);
 typedef struct comp_cast_s {
     uint8_t   idx; // action index
@@ -425,6 +426,32 @@ done:
     embeddedCliPrint(cli, msg);
 }
 
+bool set_log_validate(const char *token, uint8_t pos)
+{
+    if (pos == 2 || pos == 3) {
+        if (strcmp(token, "all") == 0)
+            return true;
+    }
+
+    if (pos == 2) {
+        for (int did = 1; did < MAX_DOMAIN; did++) {
+            if ((dom_map_en & BIT(did)) && strcmp(token, domain_name(did, 0)) == 0)
+                return true;
+        }
+    } else if (pos == 3) {
+        for (int eid = 0; eid < MAX_ENTITY; eid++) {
+            if ((ent_map_en & BIT(eid)) && strcmp(token, entity_name(eid, 0)) == 0)
+                return true;
+        }
+    } else if (pos == 4) {
+        for (int i = 0; i < NUM_LOG_LEVELS; i++) {
+            if (strcmp(token, level_name((uint8_t)level_id[i], 0)) == 0)
+                return true;
+        }
+    }
+    return false;
+}
+
 void set_log_completion(EmbeddedCli *cli, const char *token, uint8_t pos)
 {
     const char *match = nullptr;
@@ -503,6 +530,11 @@ void set_log_completion(EmbeddedCli *cli, const char *token, uint8_t pos)
 static const comp_spec_t specs[] = {
     {0, nullptr           }, // Default: No special handling
     {1, set_log_completion}, // Custom: 'set log <domain> <entity> <level>'
+};
+
+static const args_validate_t specs_valid[] = {
+    nullptr,          // [0] Reserved
+    set_log_validate, // [1] Validate set log args
 };
 
 static const char *single[] = {nullptr};
@@ -845,7 +877,6 @@ static void do_cmd_arg_completion_dispatch(EmbeddedCli *cli, const char *token, 
                     if (do_sub_completion(cli, opt, token)) {
                         return;
                     }
-                    // If no match in static options, try special handling
                     goto is_special_handling;
                 }
             }
@@ -904,13 +935,13 @@ static void cmd_dispatch(EmbeddedCli *cli, char *args, int count, const cmd_comp
         l2_idx = 0;
 
     if (!arg2 || (help && count == 2)) {
-        if (!has_l2)
+        if (!has_l2 && desc->comp.spec_idx == 0 && !help)
             goto action_run;
 
         if (!arg2 && is_hybrid && desc->comp.spec_idx == 0)
             goto action_run;
 
-        if (!(is_hybrid && desc->comp.spec_idx != 0)) {
+        if (desc->comp.spec_idx == 0) {
             snprintf(msg, sizeof(msg), "%s %s", desc->comp.name, arg1);
             do_help(cli, l2_subcmd, 1, msg);
             return;
@@ -934,11 +965,15 @@ static void cmd_dispatch(EmbeddedCli *cli, char *args, int count, const cmd_comp
         if (help || (l3_opts && count < path_tokens)) {
             int n = snprintf(msg, sizeof(msg), "%s", desc->comp.name);
 
-            int num_tkns = help ? (count - 1) : count;
+            int                   num_tkns = help ? (count - 1) : count;
+            const args_validate_t is_arg_valid = specs_valid[desc->comp.spec_idx];
+
             for (int i = 1; i <= num_tkns; i++) {
                 const char *tkn = embeddedCliGetToken(args, i);
-                if (tkn) {
+                if (i <= path_tokens || (is_arg_valid && is_arg_valid(tkn, i))) {
                     n += snprintf(msg + n, sizeof(msg) - n, " %s", tkn);
+                } else {
+                    return (void)embeddedCliPrint(cli, invalid);
                 }
             }
 
@@ -946,8 +981,9 @@ static void cmd_dispatch(EmbeddedCli *cli, char *args, int count, const cmd_comp
             int          present = (help ? count - 1 : count) - path_tokens;
 
             if (opts && present > 0) {
-                for (int i = 0; i < present && opts[i] != nullptr; i++)
+                for (int i = 0; (i < present) && opts[i]; i++) {
                     opts++;
+                }
             }
 
             do_help(cli, opts, 3, msg);
