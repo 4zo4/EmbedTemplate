@@ -96,22 +96,25 @@ static uint8_t   entity_map[ENTITY_MAP_SIZE];
 static name_id_t entity_tbl[MAX_ENTITY];
 static uint8_t   level_map[LOG_LEVEL_MAP_SIZE];
 static name_id_t level_tbl[NUM_LOG_LEVELS];
-static int       level_id[NUM_LOG_LEVELS] = {LOG_LEVEL_NONE, LOG_LEVEL_CRITICAL, LOG_LEVEL_ERROR, LOG_LEVEL_WARNING, LOG_LEVEL_INFO, LOG_LEVEL_DEBUG};
+static const int level_id[NUM_LOG_LEVELS] = {LOG_LEVEL_NONE, LOG_LEVEL_CRITICAL, LOG_LEVEL_ERROR, LOG_LEVEL_WARNING, LOG_LEVEL_INFO, LOG_LEVEL_DEBUG};
 
 #define MAP_ALL_ENTITIES ((1U << MAX_ENTITY) - 1)
 #define MAP_ALL_DOMAINS ((1U << MAX_DOMAIN) - 1)
 
 #ifdef ENABLE_RTOS
-static uint16_t ent_map_en = MAP_ALL_ENTITIES;
+static const uint16_t ent_map_en = MAP_ALL_ENTITIES;
 #else
-static uint16_t ent_map_en = (MAP_ALL_ENTITIES & ~(1U << ENTITY_SIM));
+static const uint16_t ent_map_en = (MAP_ALL_ENTITIES & ~(1U << ENTITY_SIM));
 #endif
 
 #ifdef ENABLE_TEST
-static uint16_t dom_map_en = MAP_ALL_DOMAINS;
+static const uint16_t dom_map_en = MAP_ALL_DOMAINS;
 #else
-static uint16_t dom_map_en = (MAP_ALL_DOMAINS & ~(1U << DOMAIN_TEST));
+static const uint16_t dom_map_en = (MAP_ALL_DOMAINS & ~(1U << DOMAIN_TEST));
 #endif
+
+const char *error = "[ERROR] Too many arguments";
+const char *invalid = "[ERROR] Invalid selection";
 
 // -- End of globals --
 
@@ -217,15 +220,13 @@ void show_config(EmbeddedCli *cli, char *args, int count)
 
 void show_config_sim(EmbeddedCli *cli, char *args, int count)
 {
-    const char *opt = (count >= 3) ? embeddedCliGetToken(args, 3) : nullptr;
+    const char *opt = embeddedCliGetToken(args, 3);
     int         what = 0; // 'current'
 
-    if (opt) {
-        if (strcmp(opt, "default") == 0)
-            what = 1;
-        else if (strcmp(opt, "ranges") == 0)
-            what = 2;
-    }
+    if (strcmp(opt, "default") == 0)
+        what = 1;
+    else if (strcmp(opt, "ranges") == 0)
+        what = 2;
 
     alignas(8) char msg[256 + 8] = "Simulation config:";
 
@@ -501,13 +502,25 @@ void set_log_completion(EmbeddedCli *cli, const char *token, uint8_t pos)
 #define SPECS_SIZE (sizeof(specs) / sizeof(comp_spec_t))
 static const comp_spec_t specs[] = {
     {0, nullptr           }, // Default: No special handling
-    {1, set_log_completion}, // Custom logic: 'set log <domain> <entity> <level>'
+    {1, set_log_completion}, // Custom: 'set log <domain> <entity> <level>'
 };
 
 static const char *single[] = {nullptr};
 
 /**
  * @brief Auto-completion tree for the 'set' command.
+ * Special handling profiles for the 'set' command.
+ * 1. Fully Dynamic ('set log'):
+ *    - Hybrid path: The command 'log' is a terminal verb (Path Depth 1).
+ *    - Dynamic Completion: Uses 'set_log_completion' (spec_idx 1) to fetch
+ *      live system strings (Domains/Entities) for each positional argument.
+ *    - Custom Help: Overrides standard help to show filtered lists of
+ *      currently available domains/entities.
+ * 2. Semi-Static ('set sim'):
+ *    - Nested path: Requires sub-verbs 'phy' or 'temp' (Path Depth 2).
+ *    - Positional Hints: Uses the 'level3' table only for static naming
+ *      hints (e.g., <ramp>, <mass>) to guide numeric input.
+ *    - Standard Completion: TAB simply provides the next sub-verb.
  */
 #ifdef ENABLE_RTOS
 static const char  *set_cmd_compo_1[] = {"log", "sim", nullptr};    // Level 1: Sub-commands
@@ -527,14 +540,48 @@ static const char **set_cmd_compos[] = {
     set_cmd_compo_1_1, // 'set log' path
 };
 #endif
+static const char *set_cmd_log_args[] = {"domain", "entity", "level", nullptr};
+static const char *set_cmd_sim_phy_args[] = {"ramp", "mass", "cond", "power", "ambient", nullptr};
+static const char *set_cmd_sim_temp_args[] = {"latency", "target", "critical", "hyster", "cooldown", nullptr};
+
+// Level 3 Options:
+// These act as POSITIONAL HINTS because spec_idx is non-zero.
+static const comp_opt_t set_cmd_options[] = {
+    {1, set_cmd_log_args     }, // 'set log' -> act_idx 1
+    {2, set_cmd_sim_phy_args }, // 'set sim phy' -> lookup index 2
+    {3, set_cmd_sim_temp_args}, // 'set sim temp' -> lookup index 3
+};
 
 static const cmd_comp_t set_cmd_comp = {
     .name = "set",
     .level1 = set_cmd_compo_1,
     .level2 = set_cmd_compos,
-    .level3 = nullptr,
-    .opt_size = 0,
+    .level3 = set_cmd_options,
+    .opt_size = (uint16_t)(sizeof(set_cmd_options) / sizeof(comp_opt_t)),
     .spec_idx = 1 // Points to set_log_completion in 'specs' table
+};
+
+void on_set_log_command(EmbeddedCli *cli, char *args, int count);
+void on_set_sim_command(EmbeddedCli *cli, char *args, int count);
+
+static void (*set_cmd_action[])(EmbeddedCli *cli, char *args, int count) = {
+    nullptr,            // [0] Reserved
+    on_set_log_command, // [1] sel log <pos args> - matches spec_idx 1
+    on_set_sim_command, // [2] set sim [options] - matches spec_idx 2
+};
+
+/**
+ * Action index table:
+ * [0] = reserved
+ * [1] = log (action index 1)
+ * [2] = sim (action index 2)
+ */
+static const uint8_t set_cmd_action_idx[] = {0, 1, 2};
+
+static const cmd_comp_desc_t set_cmd_desc = {
+    .comp = set_cmd_comp,
+    .act_idx = set_cmd_action_idx,
+    .action = set_cmd_action,
 };
 
 /**
@@ -568,12 +615,12 @@ static const char **show_cmd_compos[] = {
 static const char *options_stats_log[] = {"clear", nullptr};
 #ifdef ENABLE_RTOS
 static const char *options_config_sim[] = {"current", "default", "ranges", nullptr};
-static comp_opt_t  show_options[] = {
+static comp_opt_t  show_cmd_options[] = {
     {0, options_stats_log }, // Maps to 'show stats log [clear]'
     {5, options_config_sim}, // Maps to 'show config sim [current|default|ranges]'
 };
 #else
-static comp_opt_t show_options[] = {
+static const comp_opt_t show_cmd_options[] = {
     {0, options_stats_log}, // Maps to 'show stats log [clear]'
 };
 #endif
@@ -591,15 +638,15 @@ static comp_opt_t show_options[] = {
  * 5        | entities | 1        | 9             | 9
  * 6        | levels   | 1        | 10            | 10
  */
-static const uint8_t show_action_idx[] = {0, 0, 3, 7, 8, 9, 10};
+static const uint8_t show_cmd_action_idx[] = {0, 0, 3, 7, 8, 9, 10};
 
-// Bitmask identifying which action indices support Level 3 options (show_options)
-static const uint32_t show_allow_opt = BIT(0) | BIT(3) | BIT(5);
+// Bitmask identifying which action indices support Level 3 options (show_cmd_options)
+static const uint32_t show_cmd_allow_opt = BIT(0) | BIT(3) | BIT(5);
 
 /**
  * @brief Execution handlers mapped to the 1D Action Index.
  */
-static void (*show_action[])(EmbeddedCli *cli, char *args, int count) = {
+static void (*show_cmd_action[])(EmbeddedCli *cli, char *args, int count) = {
     show_stats_log,  // [0] show stats log [clear]
     show_stats_sys,  // [1] show stats sys
     show_stats_task, // [2] show stats task
@@ -616,57 +663,65 @@ static void (*show_action[])(EmbeddedCli *cli, char *args, int count) = {
 };
 
 static const cmd_comp_desc_t show_cmd_desc = {
+    // clang-format off
     .comp = {
-             .name = "show",
-             .level1 = show_cmd_compo_1,
-             .level2 = show_cmd_compos,
-             .level3 = show_options,
-             .opt_size = (uint16_t)(sizeof(show_options) / sizeof(comp_opt_t)),
-             .spec_idx = 0, // No special arg completion logic
+        .name = "show",
+        .level1 = show_cmd_compo_1,
+        .level2 = show_cmd_compos,
+        .level3 = show_cmd_options,
+        .opt_size = (uint16_t)(sizeof(show_cmd_options) / sizeof(comp_opt_t)),
+        .spec_idx = 0, // No special arg completion logic
     },
-    .act_idx = show_action_idx,
-    .opt_mask = show_allow_opt,
-    .action = show_action,
+    // clang-format on
+    .act_idx = show_cmd_action_idx,
+    .opt_mask = show_cmd_allow_opt,
+    .action = show_cmd_action,
 };
 
 // -- End of globals --
 
-void do_help(EmbeddedCli *cli, const char **options, bool usage, const char *prefix)
+void do_help(EmbeddedCli *cli, const char **options, int usage, const char *prefix)
 {
-    char msg[128];
-    bool use_options = (options != nullptr && options[0] != nullptr);
+    char        msg[128];
+    const char *head = (usage == 1 || usage == 3) ? "Usage:" : "use:";
+    int         n = snprintf(msg, sizeof(msg), "%s %s", head, prefix ? prefix : "");
 
-    int n = snprintf(msg, sizeof(msg), "%s", usage ? "Usage:" : "use:");
+    if (options && options[0]) {
+        // usage 1: <a|b|c> (Required selection)
+        // usage 2: [a|b|c] (Optional selection)
+        // usage 3: <a> <b> <c> (Fixed positional args)
+        if (usage != 3 && n > 0 && msg[n - 1] != ' ') {
+            msg[n++] = ' ';
+        }
 
-    if (prefix && prefix[0] != '\0')
-        n += snprintf(msg + n, sizeof(msg) - n, " %s", prefix);
+        if (usage == 1)
+            msg[n++] = '<';
+        else if (usage == 2)
+            msg[n++] = '[';
 
-    if (use_options) {
-        if (usage)
-            n += snprintf(msg + n, sizeof(msg) - n, " <");
-
-        bool after_1st_word = false;
+        bool first_word = true;
         for (int i = 0; options[i] != nullptr; i++) {
             if (options[i][0] == '\0')
                 continue;
 
-            if (n >= (int)sizeof(msg) - 20)
+            if (n >= (int)sizeof(msg) - 12)
                 break;
 
-            const char *sep = "";
-            if (after_1st_word) {
-                sep = "|";
+            if (usage == 3) {
+                n += snprintf(msg + n, sizeof(msg) - n, " <%s>", options[i]);
             } else {
-                sep = usage ? "" : " ";
+                // Only add '|' if this is NOT the first word we've printed
+                n += snprintf(msg + n, sizeof(msg) - n, "%s%s", first_word ? "" : "|", options[i]);
+                first_word = false;
             }
-
-            n += snprintf(msg + n, sizeof(msg) - n, "%s%s", sep, options[i]);
-            after_1st_word = true;
         }
 
-        if (usage && after_1st_word)
-            strncat(msg, ">", sizeof(msg) - strlen(msg) - 1);
+        if (usage == 1)
+            msg[n++] = '>';
+        else if (usage == 2)
+            msg[n++] = ']';
     }
+    msg[n] = '\0';
     embeddedCliPrint(cli, msg);
 }
 
@@ -703,7 +758,18 @@ bool do_sub_completion(EmbeddedCli *cli, const char **options, const char *token
     return false;
 }
 
-void do_cmd_arg_completion(EmbeddedCli *cli, const char *token, uint8_t pos, const cmd_comp_t *comp, const uint8_t *action_idx)
+static int find_index_by_str(const char **list, const char *str)
+{
+    if (!list || !str)
+        return -1;
+    for (int i = 0; list[i] != nullptr; i++) {
+        if (strcmp(list[i], str) == 0)
+            return i;
+    }
+    return -1;
+}
+
+static void do_cmd_arg_completion_dispatch(EmbeddedCli *cli, const char *token, uint8_t pos, const cmd_comp_t *comp, const uint8_t *action_idx)
 {
     uint16_t        input_len;
     const char     *input = embeddedCliGetInputString(cli, &input_len);
@@ -725,25 +791,24 @@ void do_cmd_arg_completion(EmbeddedCli *cli, const char *token, uint8_t pos, con
         return;
     } else if (pos == 2) {
         const char *arg = embeddedCliGetToken(buf, 2);
-        args_comp_t args_comp;
 
         for (int i = 0; comp->level1[i] != nullptr; i++) {
             if (arg && strncmp(arg, comp->level1[i], strlen(arg)) == 0) {
+                bool         is_full_match = (strlen(arg) == strlen(comp->level1[i]));
                 const char **sub = comp->level2[i + 1];
-                if (sub == nullptr || sub[0] == nullptr) {
-                    args_comp = (args_comp_t)find_by_index(specs, SPECS_SIZE, comp->spec_idx);
-                    if (args_comp)
-                        args_comp(cli, token, pos);
-                    return;
+
+                bool has_options = (sub && sub[0] && (sub[0][0] != '\0' || sub[1] != nullptr));
+
+                if (!has_options || (is_full_match && !has_options)) {
+                    goto is_special_handling;
                 }
+
                 if (help) {
-                    char msg[48];
+                    char msg[64];
                     snprintf(msg, sizeof(msg), "%s %s", comp->name, comp->level1[i]);
                     do_help(cli, sub, false, msg);
                 } else if (!do_sub_completion(cli, sub, token)) {
-                    args_comp = (args_comp_t)find_by_index(specs, SPECS_SIZE, comp->spec_idx);
-                    if (args_comp)
-                        args_comp(cli, token, pos);
+                    goto is_special_handling;
                 }
                 return;
             }
@@ -753,38 +818,43 @@ void do_cmd_arg_completion(EmbeddedCli *cli, const char *token, uint8_t pos, con
         const char *arg1 = embeddedCliGetToken(buf, 2);
         const char *arg2 = embeddedCliGetToken(buf, 3);
 
-        if (!comp->level3 || !arg1 || !arg2)
+        if (!arg1 || !arg2)
             goto is_special_handling;
-        int l1_idx = -1;
-        for (int i = 0; comp->level1[i] != nullptr; i++) {
-            if (strcmp(arg1, comp->level1[i]) == 0) {
-                l1_idx = i;
-                break;
-            }
-        }
+
+        int l1_idx = find_index_by_str(comp->level1, arg1);
 
         if (l1_idx != -1) {
             const char **sub = comp->level2[l1_idx + 1];
-            int          l2_idx = -1;
-            for (int i = 0; sub[i] != nullptr; i++) {
-                if (strcmp(arg2, sub[i]) == 0) {
-                    l2_idx = i;
-                    break;
-                }
-            }
+            int          l2_idx = find_index_by_str(sub, arg2);
+
+            bool is_hybrid = (sub && sub[0] && sub[0][0] == '\0');
+            if (l2_idx == -1 && is_hybrid && comp->spec_idx != 0)
+                goto is_special_handling;
 
             if (l2_idx != -1 && action_idx != nullptr) {
-                int act_idx = action_idx[l1_idx + 1] + l2_idx;
-                if (comp->level3) {
-                    const char **opt = (const char **)find_by_index(comp->level3, comp->opt_size, act_idx);
-                    if (opt)
-                        do_sub_completion(cli, opt, token);
+                int          act_idx = action_idx[l1_idx + 1] + l2_idx;
+                const char **opt = (const char **)find_by_index(comp->level3, comp->opt_size, act_idx);
+
+                if (opt) {
+                    if (help) {
+                        char msg[64];
+                        snprintf(msg, sizeof(msg), "%s %s %s", comp->name, arg1, arg2);
+                        do_help(cli, opt, false, msg);
+                        return;
+                    }
+                    if (do_sub_completion(cli, opt, token)) {
+                        return;
+                    }
+                    // If no match in static options, try special handling
+                    goto is_special_handling;
                 }
             }
         }
+
+        if (comp->spec_idx != 0)
+            goto is_special_handling;
         return;
     }
-
 is_special_handling:
     args_comp_t args_comp = (args_comp_t)find_by_index(specs, SPECS_SIZE, comp->spec_idx);
     if (args_comp)
@@ -793,137 +863,132 @@ is_special_handling:
 
 void set_cmd_completion(EmbeddedCli *cli, const char *token, uint8_t pos)
 {
-    do_cmd_arg_completion(cli, token, pos, &set_cmd_comp, nullptr);
+    do_cmd_arg_completion_dispatch(cli, token, pos, &set_cmd_comp, nullptr);
 }
 
 void show_cmd_completion(EmbeddedCli *cli, const char *token, uint8_t pos)
 {
-    do_cmd_arg_completion(cli, token, pos, &show_cmd_desc.comp, show_cmd_desc.act_idx);
+    do_cmd_arg_completion_dispatch(cli, token, pos, &show_cmd_desc.comp, show_cmd_desc.act_idx);
 }
 
-void cmd_args_dispatch(EmbeddedCli *cli, char *args, int count, const cmd_comp_desc_t *desc)
+static void cmd_dispatch(EmbeddedCli *cli, char *args, int count, const cmd_comp_desc_t *desc)
 {
     cmd_in_test_mode(cli);
+    char msg[128];
 
-    bool help = false;
-    if (count == 0) {
-        do_help(cli, desc->comp.level1, true, desc->comp.name);
+    const char *last = (count > 0) ? embeddedCliGetToken(args, count) : nullptr;
+    bool        help = (last && strcmp(last, "?") == 0);
+
+    if (count == 0 || (help && count == 1)) {
+        do_help(cli, desc->comp.level1, !help, desc->comp.name);
         return;
     }
 
-    const char *last = embeddedCliGetToken(args, count);
-    if (last && strcmp(last, "?") == 0)
-        help = true;
-
-    if (help && count == 1) {
-        do_help(cli, desc->comp.level1, false, desc->comp.name);
-        return;
-    }
-
-    const char *invalid = "[ERROR] Invalid selection";
     const char *arg1 = embeddedCliGetToken(args, 1);
-    int         idx = -1;
-    for (int i = 0; desc->comp.level1[i] != nullptr; i++) {
-        if (strcmp(arg1, desc->comp.level1[i]) == 0) {
-            idx = i;
-            break;
-        }
-    }
+    int         l1_idx = find_index_by_str(desc->comp.level1, arg1);
+    if (l1_idx == -1)
+        return (void)embeddedCliPrint(cli, invalid);
 
-    if (idx == -1) {
-        embeddedCliPrint(cli, invalid);
-        return;
-    }
-
-    char         msg[48];
-    const char  *error = "[ERROR] Too many arguments";
-    const char **sub_options = desc->comp.level2[idx + 1];
-    int          act_idx = desc->act_idx[idx + 1];
-    int          max_args = (sub_options == nullptr || sub_options[0] == nullptr) ? 1 : 2;
-    bool         use_opt = (desc->opt_mask & BIT(act_idx));
-
-    if (!help && !use_opt && count > max_args) {
-        embeddedCliPrint(cli, error);
-        snprintf(msg, sizeof(msg), "%s %s", desc->comp.name, arg1);
-        do_help(cli, sub_options, true, msg);
-        return;
-    }
-
-    if (max_args == 1) {
-        if (help) {
-            snprintf(msg, sizeof(msg), "%s %s", desc->comp.name, desc->comp.level1[idx]);
-            do_help(cli, nullptr, false, msg);
-        } else if (desc->action[act_idx]) {
-            desc->action[act_idx](cli, args, count);
-        }
-        return;
-    }
+    int          act_idx = desc->act_idx ? desc->act_idx[l1_idx + 1] : (l1_idx + 1);
+    const char **l2_subcmd = desc->comp.level2[l1_idx + 1];
+    bool         has_l2 = (l2_subcmd && l2_subcmd[0] && l2_subcmd[0][0] != '\0');
 
     const char *arg2 = (count >= 2) ? embeddedCliGetToken(args, 2) : nullptr;
-    if (arg2 == nullptr || (help && strcmp(arg2, "?") == 0)) {
-        bool use_base = (sub_options != nullptr && sub_options[0] != nullptr && sub_options[0][0] == '\0');
-        if (arg2 == nullptr && use_base) {
-            if (desc->action[act_idx])
-                desc->action[act_idx](cli, args, count);
-        } else {
+    int         l2_idx = -1;
+    bool        is_hybrid = (l2_subcmd && l2_subcmd[0] && l2_subcmd[0][0] == '\0');
+
+    if (arg2 && !(help && count == 2))
+        l2_idx = find_index_by_str(l2_subcmd, arg2);
+
+    if (l2_idx == -1 && is_hybrid)
+        l2_idx = 0;
+
+    if (!arg2 || (help && count == 2)) {
+        if (!has_l2)
+            goto action_run;
+
+        if (!arg2 && is_hybrid && desc->comp.spec_idx == 0)
+            goto action_run;
+
+        if (!(is_hybrid && desc->comp.spec_idx != 0)) {
             snprintf(msg, sizeof(msg), "%s %s", desc->comp.name, arg1);
-            do_help(cli, sub_options, !help, msg);
+            do_help(cli, l2_subcmd, 1, msg);
+            return;
         }
+    }
+
+    if (l2_idx == -1)
+        return (void)embeddedCliPrint(cli, invalid);
+
+    int lookup_idx = act_idx + l2_idx;
+
+    const char **l3_opts = nullptr;
+    if (desc->comp.spec_idx != 0 || (desc->opt_mask & BIT(lookup_idx)))
+        l3_opts = (const char **)find_by_index(desc->comp.level3, desc->comp.opt_size, lookup_idx);
+
+    const char *arg3 = (count >= 3) ? embeddedCliGetToken(args, 3) : nullptr;
+
+    if (desc->comp.spec_idx != 0) {
+        int path_tokens = (arg2 && !is_hybrid) ? 2 : 1;
+
+        if (help || (l3_opts && count < path_tokens)) {
+            int n = snprintf(msg, sizeof(msg), "%s", desc->comp.name);
+
+            int num_tkns = help ? (count - 1) : count;
+            for (int i = 1; i <= num_tkns; i++) {
+                const char *tkn = embeddedCliGetToken(args, i);
+                if (tkn) {
+                    n += snprintf(msg + n, sizeof(msg) - n, " %s", tkn);
+                }
+            }
+
+            const char **opts = l3_opts;
+            int          present = (help ? count - 1 : count) - path_tokens;
+
+            if (opts && present > 0) {
+                for (int i = 0; i < present && opts[i] != nullptr; i++)
+                    opts++;
+            }
+
+            do_help(cli, opts, 3, msg);
+            return;
+        }
+
+        if (l3_opts) {
+            int max_allowed = 0;
+            while (l3_opts[max_allowed])
+                max_allowed++;
+            int total = (help ? count - 1 : count) - path_tokens;
+            if (total > max_allowed) {
+                embeddedCliPrint(cli, error);
+                return;
+            }
+        }
+        goto action_run;
+    }
+
+    act_idx = lookup_idx;
+    if (help || (l3_opts && !arg3)) {
+        int n = snprintf(msg, sizeof(msg), "%s %s", desc->comp.name, arg1);
+        if (arg2 && !(help && count == 2))
+            snprintf(msg + n, sizeof(msg) - n, " %s", arg2);
+        do_help(cli, l3_opts, l3_opts != nullptr ? 2 : 0, msg); // Usage: [a|b|c]
         return;
     }
 
-    idx = -1;
-    for (int i = 0; sub_options[i] != nullptr; i++) {
-        if (strcmp(arg2, sub_options[i]) == 0) {
-            idx = i;
-            break;
-        }
-    }
+    if (arg3 && !l3_opts)
+        return (void)embeddedCliPrint(cli, error);
 
-    if (idx != -1) {
-        act_idx += idx;
-        use_opt = (desc->opt_mask & BIT(act_idx));
-        const char *arg3 = (count >= 3) ? embeddedCliGetToken(args, 3) : nullptr;
+    if (arg3 && l3_opts && find_index_by_str(l3_opts, arg3) == -1)
+        return (void)embeddedCliPrint(cli, invalid);
 
-        if (arg3 && strcmp(arg3, "?") == 0) {
-            char opt_buf[64] = " [options]";
-            if (use_opt) {
-                if (desc->comp.level3) {
-                    const char **opt = (const char **)find_by_index(desc->comp.level3, desc->comp.opt_size, act_idx);
-                    if (opt && opt[0] != nullptr) {
-                        opt_buf[2] = '\0';
-                        for (int i = 0; opt[i] != nullptr; i++) {
-                            if (i > 0)
-                                strcat(opt_buf, "|");
-                            strcat(opt_buf, opt[i]);
-                        }
-                        strcat(opt_buf, "]");
-                    }
-                }
-            } else {
-                opt_buf[0] = '\0';
-            }
+    // Final check for unexpected 4th token in standard commands
+    if (count > (l3_opts ? 3 : 2) && !help)
+        return (void)embeddedCliPrint(cli, error);
 
-            snprintf(msg, sizeof(msg), "%s %s %s%s", desc->comp.name, arg1, arg2, opt_buf);
-            do_help(cli, nullptr, false, msg);
-            return;
-        }
-
-        if (!use_opt && count >= 3) {
-            embeddedCliPrint(cli, error);
-            return;
-        }
-
-        if (desc->action[act_idx])
-            desc->action[act_idx](cli, args, count);
-    } else {
-        embeddedCliPrint(cli, invalid);
-    }
-}
-
-void on_show_command(EmbeddedCli *cli, char *args, void *context)
-{
-    cmd_args_dispatch(cli, args, (args == nullptr) ? 0 : embeddedCliGetTokenCount(args), &show_cmd_desc);
+action_run:
+    if (desc->action[act_idx])
+        desc->action[act_idx](cli, args, count);
 }
 
 static uint32_t cliHash(const char *str)
@@ -1050,104 +1115,65 @@ static void sim_cfg_print_oor(EmbeddedCli *cli, int ret)
 
 void on_set_sim_command(EmbeddedCli *cli, char *args, int count)
 {
-    const char *arg;
-    bool        phy = false;
-    bool        temp = false;
-    bool        help = false;
+    const char *arg = embeddedCliGetToken(args, 2); // Guaranteed to be "phy" or "temp"
+    bool        temp = (strcmp(arg, "temp") == 0);
     int         ret = 0;
     uint16_t    oor_mask = 0;
     uint16_t    cfg_mask = 0;
-
-    if (count < 3)
-        help = true;
-
-    if (!help) {
-        arg = embeddedCliGetToken(args, 2);
-        if (strcmp(arg, "phy") == 0)
-            phy = true;
-        else if (strcmp(arg, "temp") == 0)
-            temp = true;
-
-        arg = embeddedCliGetToken(args, 3);
-        if (strcmp(arg, "?") == 0)
-            help = true;
-
-        if ((phy || temp) && count > 7)
-            help = true;
-    }
-    if (help) {
-        if (count < 3)
-            embeddedCliPrint(cli, "Usage: set sim temp [?] <numeric args> or set sim phy [?] <numeric args>");
-        else if (temp)
-            embeddedCliPrint(cli, "Usage: set sim temp [?] <latency> <target> <critical> <hyster> <cooldown>");
-        else if (phy)
-            embeddedCliPrint(cli, "Usage: set sim phy [?] <ramp> <mass> <cond> <power> <ambient>");
-        else
-            embeddedCliPrint(cli, "[ERROR] Invalid selection");
-        return;
-    }
-
-    uint8_t  hdr = 0;
-    uint16_t val;
-    stream_t pkt[2];
+    uint8_t     hdr = 0;
+    uint16_t    val;
+    stream_t    pkt[2] = {0};
 
     if (temp) {
+        // tokens 3 to 7 map to the 5 temp args
         for (int i = 0; i < 5 && (i + 3 <= count); i++) {
             arg = embeddedCliGetToken(args, i + 3);
             val = (uint16_t)atoi(arg);
             if (val < 256) {
-                pkt[1].u8[i + 1] = val;
+                pkt[1].u8[i + 1] = (uint8_t)val;
                 hdr |= BIT(i + 1);
-            } else if (val >= 256) {
+            } else {
                 oor_mask |= BIT2(i + 1);
             }
         }
         cfg_mask = (uint16_t)hdr << 8;
-        pkt[0].u8[0] = BIT(0); // add continue BIT(0)
+        pkt[0].u8[0] = BIT(0); // Continue bit
         pkt[1].u8[0] = hdr;
         ret = set_sim_cfg(2, pkt) | oor_mask;
-        if (ret > 0)
-            sim_cfg_print_oor(cli, ret);
-        if ((cfg_mask & ~(uint16_t)ret) != 0)
-            embeddedCliPrint(cli, "Sim config set");
-        return;
-    }
-
-    arg = embeddedCliGetToken(args, 3);
-    val = (uint16_t)atoi(arg);
-    if (val < 256) {
-        pkt[0].u8[1] = (uint8_t)val;
-        hdr |= BIT(1);
     } else {
-        oor_mask |= BIT(1);
-    }
-
-    for (int i = 1; i < 6 && (i + 3 <= count); i++) {
-        arg = embeddedCliGetToken(args, i + 3);
+        arg = embeddedCliGetToken(args, 3);
         val = (uint16_t)atoi(arg);
-        if (val) {
-            pkt[0].u16[i] = val;
-            hdr |= BIT(i + 1);
+        if (val < 256) {
+            pkt[0].u8[1] = (uint8_t)val;
+            hdr |= BIT(1);
+        } else {
+            oor_mask |= BIT(1);
         }
-    }
 
-    cfg_mask = (uint16_t)hdr;
-    if (count == 7) {
-        arg = embeddedCliGetToken(args, 7);
-        val = (uint16_t)atoi(arg);
-        pkt[1].u16[3] = val;
-        hdr |= BIT(0); // add continue BIT(0)
-    }
+        for (int i = 1; i < 5 && (i + 3 <= count); i++) {
+            arg = embeddedCliGetToken(args, i + 3);
+            val = (uint16_t)atoi(arg);
+            if (val) {
+                pkt[0].u16[i] = val;
+                hdr |= BIT(i + 1);
+            }
+        }
 
-    pkt[0].u8[0] = hdr;
+        cfg_mask = (uint16_t)hdr;
+        pkt[0].u8[0] = hdr;
 
-    if (count == 7) {
-        hdr = BIT(6); // mark pkt[1].u16[3] field present
-        cfg_mask |= BIT2(6);
-        pkt[1].u8[0] = hdr;
-        ret = set_sim_cfg(2, pkt);
-    } else {
-        ret = set_sim_cfg(1, pkt);
+        // Special handling for the 5th PHY arg (ambient) if count == 7
+        if (count == 7) {
+            arg = embeddedCliGetToken(args, 7);
+            val = (uint16_t)atoi(arg);
+            pkt[1].u16[3] = val;
+            pkt[0].u8[0] |= BIT(0); // mark continue
+            pkt[1].u8[0] = BIT(6);  // mark ambient field present
+            cfg_mask |= BIT2(6);
+            ret = set_sim_cfg(2, pkt);
+        } else {
+            ret = set_sim_cfg(1, pkt);
+        }
     }
 
     if (ret > 0)
@@ -1186,20 +1212,6 @@ void cli_log_cmd_init(void)
 
 void on_set_log_command(EmbeddedCli *cli, char *args, int count)
 {
-    bool help = false;
-
-    if (count == 2) {
-        const char *arg = embeddedCliGetToken(args, 2);
-        if (strcmp(arg, "?") == 0)
-            help = true;
-    } else if (count != 4) {
-        help = true;
-    }
-
-    if (help) {
-        embeddedCliPrint(cli, "Usage: set log <domain> <entity> <level>");
-        return;
-    }
     const char *dom = embeddedCliGetToken(args, 2);
     const char *ent = embeddedCliGetToken(args, 3);
     const char *lvl = embeddedCliGetToken(args, 4);
@@ -1238,29 +1250,12 @@ void on_set_log_command(EmbeddedCli *cli, char *args, int count)
 
 void on_set_command(EmbeddedCli *cli, char *args, void *context)
 {
-    int count = (args == nullptr) ? 0 : embeddedCliGetTokenCount(args);
+    cmd_dispatch(cli, args, (args == nullptr) ? 0 : embeddedCliGetTokenCount(args), &set_cmd_desc);
+}
 
-    const char *arg = (count > 0) ? embeddedCliGetToken(args, 1) : nullptr;
-
-    cmd_in_test_mode(cli);
-
-    if (count == 0 || (arg && strcmp(arg, "?") == 0)) {
-        do_help(cli, set_cmd_comp.level1, true, "set");
-        return;
-    }
-
-    bool log = (strcmp(arg, "log") == 0);
-    bool sim = (strcmp(arg, "sim") == 0);
-
-    if (!log && !sim) {
-        embeddedCliPrint(cli, "[ERROR] Invalid selection");
-        return;
-    }
-
-    if (log)
-        on_set_log_command(cli, args, count);
-    if (sim)
-        on_set_sim_command(cli, args, count);
+void on_show_command(EmbeddedCli *cli, char *args, void *context)
+{
+    cmd_dispatch(cli, args, (args == nullptr) ? 0 : embeddedCliGetTokenCount(args), &show_cmd_desc);
 }
 
 void set_system_commands(EmbeddedCli *cli)
