@@ -532,9 +532,11 @@ static const comp_spec_t specs[] = {
     {1, set_log_completion}, // Custom: 'set log <domain> <entity> <level>'
 };
 
+#define SPECS_VALID_SIZE (sizeof(specs_valid) / sizeof(args_validate_t))
 static const args_validate_t specs_valid[] = {
     nullptr,          // [0] Reserved
-    set_log_validate, // [1] Validate set log args
+    set_log_validate, // [1] Index 1: 'set log' validation
+    nullptr,          // [2] Index 2: 'set sim' (No validation)
 };
 
 static const char *single[] = {nullptr};
@@ -580,8 +582,8 @@ static const char *set_cmd_sim_temp_args[] = {"latency", "target", "critical", "
 // These act as POSITIONAL HINTS because spec_idx is non-zero.
 static const comp_opt_t set_cmd_options[] = {
     {1, set_cmd_log_args     }, // 'set log' -> act_idx 1
-    {2, set_cmd_sim_phy_args }, // 'set sim phy' -> lookup index 2
-    {3, set_cmd_sim_temp_args}, // 'set sim temp' -> lookup index 3
+    {2, set_cmd_sim_phy_args }, // 'set sim phy' -> act_idx 2
+    {3, set_cmd_sim_temp_args}, // 'set sim temp' -> act_idx 3
 };
 
 static const cmd_comp_t set_cmd_comp = {
@@ -598,8 +600,8 @@ void on_set_sim_command(EmbeddedCli *cli, char *args, int count);
 
 static void (*set_cmd_action[])(EmbeddedCli *cli, char *args, int count) = {
     nullptr,            // [0] Reserved
-    on_set_log_command, // [1] sel log <pos args> - matches spec_idx 1
-    on_set_sim_command, // [2] set sim [options] - matches spec_idx 2
+    on_set_log_command, // [1] sel log <pos args> - matches act_idx 1
+    on_set_sim_command, // [2] set sim [options] - matches act_idx 2
 };
 
 /**
@@ -742,7 +744,6 @@ void do_help(EmbeddedCli *cli, const char **options, int usage, const char *pref
             if (usage == 3) {
                 n += snprintf(msg + n, sizeof(msg) - n, " <%s>", options[i]);
             } else {
-                // Only add '|' if this is NOT the first word we've printed
                 n += snprintf(msg + n, sizeof(msg) - n, "%s%s", first_word ? "" : "|", options[i]);
                 first_word = false;
             }
@@ -941,47 +942,59 @@ static void cmd_dispatch(EmbeddedCli *cli, char *args, int count, const cmd_comp
         if (!arg2 && is_hybrid && desc->comp.spec_idx == 0)
             goto action_run;
 
-        if (desc->comp.spec_idx == 0) {
+        if (desc->comp.spec_idx == 0 || !is_hybrid) {
             snprintf(msg, sizeof(msg), "%s %s", desc->comp.name, arg1);
             do_help(cli, l2_subcmd, 1, msg);
             return;
         }
     }
 
-    if (l2_idx == -1)
+    if (l2_idx == -1 && !help)
         return (void)embeddedCliPrint(cli, invalid);
 
-    int lookup_idx = act_idx + l2_idx;
+    act_idx += (l2_idx != -1 ? l2_idx : 0);
 
     const char **l3_opts = nullptr;
-    if (desc->comp.spec_idx != 0 || (desc->opt_mask & BIT(lookup_idx)))
-        l3_opts = (const char **)find_by_index(desc->comp.level3, desc->comp.opt_size, lookup_idx);
-
-    const char *arg3 = (count >= 3) ? embeddedCliGetToken(args, 3) : nullptr;
+    if (desc->comp.spec_idx != 0 || (desc->opt_mask & BIT(act_idx)))
+        l3_opts = (const char **)find_by_index(desc->comp.level3, desc->comp.opt_size, act_idx);
 
     if (desc->comp.spec_idx != 0) {
-        int path_tokens = (arg2 && !is_hybrid) ? 2 : 1;
+        int path_tokens = (arg2 && l2_idx != -1 && !is_hybrid) ? 2 : 1;
+        int num_tkns = help ? (count - 1) : count;
+        int present = (num_tkns > path_tokens) ? (num_tkns - path_tokens) : 0;
 
-        if (help || (l3_opts && count < path_tokens)) {
+        if (l3_opts) {
+            int max_allowed = 0;
+            while (l3_opts[max_allowed])
+                max_allowed++;
+            if (present > max_allowed) {
+                embeddedCliPrint(cli, error);
+                return;
+            }
+        }
+        // clang-format off
+        const args_validate_t is_arg_valid = (act_idx < SPECS_VALID_SIZE) ?
+                                              specs_valid[act_idx] : nullptr;
+        // clang-format on
+        if (is_arg_valid && present > 0) {
+            for (int i = path_tokens + 1; i <= num_tkns; i++) {
+                const char *tkn = embeddedCliGetToken(args, i);
+                if (!is_arg_valid(tkn, i))
+                    return (void)embeddedCliPrint(cli, invalid);
+            }
+        }
+
+        if (help || (l3_opts && present == 0)) {
             int n = snprintf(msg, sizeof(msg), "%s", desc->comp.name);
 
-            int                   num_tkns = help ? (count - 1) : count;
-            const args_validate_t is_arg_valid = specs_valid[desc->comp.spec_idx];
-
             for (int i = 1; i <= num_tkns; i++) {
-                const char *tkn = embeddedCliGetToken(args, i);
-                if (i <= path_tokens || (is_arg_valid && is_arg_valid(tkn, i))) {
-                    n += snprintf(msg + n, sizeof(msg) - n, " %s", tkn);
-                } else {
-                    return (void)embeddedCliPrint(cli, invalid);
-                }
+                n += snprintf(msg + n, sizeof(msg) - n, " %s", embeddedCliGetToken(args, i));
             }
 
             const char **opts = l3_opts;
-            int          present = (help ? count - 1 : count) - path_tokens;
 
             if (opts && present > 0) {
-                for (int i = 0; (i < present) && opts[i]; i++) {
+                for (int i = 0; (i < present) && opts[0] != nullptr; i++) {
                     opts++;
                 }
             }
@@ -990,20 +1003,11 @@ static void cmd_dispatch(EmbeddedCli *cli, char *args, int count, const cmd_comp
             return;
         }
 
-        if (l3_opts) {
-            int max_allowed = 0;
-            while (l3_opts[max_allowed])
-                max_allowed++;
-            int total = (help ? count - 1 : count) - path_tokens;
-            if (total > max_allowed) {
-                embeddedCliPrint(cli, error);
-                return;
-            }
-        }
         goto action_run;
     }
 
-    act_idx = lookup_idx;
+    const char *arg3 = (count >= 3) ? embeddedCliGetToken(args, 3) : nullptr;
+
     if (help || (l3_opts && !arg3)) {
         int n = snprintf(msg, sizeof(msg), "%s %s", desc->comp.name, arg1);
         if (arg2 && !(help && count == 2))
@@ -1047,9 +1051,8 @@ static void do_insert(uint8_t *map, uint32_t map_mask, name_id_t *table, int idx
     uint32_t slot = hash & map_mask;
 
     while (map[slot] != MAP_EMPTY) {
-        if (table[map[slot]].hash == hash) {
+        if (table[map[slot]].hash == hash)
             break;
-        }
         slot = (slot + 1) & map_mask;
     }
     map[slot] = (uint8_t)idx;
