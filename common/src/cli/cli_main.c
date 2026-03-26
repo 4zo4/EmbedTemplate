@@ -34,6 +34,7 @@ void on_test_menu(EmbeddedCli *cli, char *args, void *context);
 void on_enter_tests(EmbeddedCli *cli, char *args, void *context);
 void on_system_menu(EmbeddedCli *cli, char *args, void *context);
 void cli_log_cmd_init(void);
+void run_cli_tests(EmbeddedCli *cli);
 
 // Logging Macros for CLI specific System-Level Messages
 #define LOG_CLI_CRITICAL(...) LOG_ENTITY_CRITICAL(ID_SYS(ENT_CLI), __VA_ARGS__)
@@ -56,7 +57,7 @@ cli_data_t cli_data = {
         .no_error = false,
         .cmd_run = false,
     },
-    // clang-format oon
+    // clang-format on
 };
 
 #ifdef ENABLE_TEST
@@ -83,6 +84,11 @@ void cmd_in_test_mode(EmbeddedCli *cli)
         cli_data.flags.write_enable = true;
         embeddedCliPrint(cli, "");
     }
+}
+
+EmbeddedCli *get_cli_ctx(void)
+{
+    return (EmbeddedCli *)cli_mem;
 }
 
 void set_msg(const char *msg)
@@ -362,20 +368,18 @@ int cli_init(void **cli_ctx)
     EmbeddedCliConfig *config = embeddedCliDefaultConfig();
 
     config->maxBindingCount = CLI_MAX_BINDINGS;
-    // config->enableAutoComplete = false;
     config->cliBuffer = cli_mem;
     config->cliBufferSize = CLI_MEM_SIZE;
 
     uint16_t requiredCliBufferSize = embeddedCliRequiredSize(config);
 
-    printf("[INFO] CLI buffer allocated " STR(CLI_MEM_SIZE) " required %u bytes", requiredCliBufferSize);
+    printf("[INFO] CLI buffer (%p) allocated " STR(CLI_MEM_SIZE) " required %u bytes", cli_mem, requiredCliBufferSize);
     EmbeddedCli *cli = embeddedCliNew(config);
 
     if (cli == nullptr) {
         printf("%s: %d: [ERROR] embeddedCliNew: returned null\n", __func__, __LINE__);
         return -1;
     }
-
     signal(SIGTERM, signal_handler);
     set_conio_terminal_mode();
     cli_setup_screen();
@@ -419,6 +423,7 @@ void cli_run_test(EmbeddedCli *cli)
     embeddedCliReceiveChar(cli, '\r');
     embeddedCliProcess(cli);
     cli_data.flags.write_enable = true;
+    run_cli_tests(cli); // runs only if CLI test selected
 
     if (cli_data.flags.cmd_run) {
         cli_data.flags.cmd_run = false;

@@ -1,6 +1,7 @@
 set(PATH_COMMON ${CMAKE_CURRENT_SOURCE_DIR}/../../common)
 set(PATH_COMMON_SRC ${PATH_COMMON}/src)
 set(PATH_DRIVERS ${CMAKE_CURRENT_SOURCE_DIR}/../drivers)
+set(SPEC_INC_DIR ${CMAKE_SOURCE_DIR}/third_party/lib/embedded-cli/lib/include)
 
 # Path to common logs and arch headers
 # Path to common test headers
@@ -50,6 +51,11 @@ set(TEST_SYS_SOURCES
     ${PATH_COMMON_SRC}/cli/tests/test_cli.c
     ${PATH_COMMON_SRC}/diagnostic/logging/tests/test_log.c
 )
+
+set_source_files_properties(${PATH_COMMON_SRC}/cli/tests/test_cli.c
+                            PROPERTIES
+                            INCLUDE_DIRECTORIES "${SPEC_INC_DIR}")
+
 set(TEST_SYS_INC_DIRS
     ${PATH_DRIVERS}/include
     ${PATH_COMMON_SRC}/cli/tests
