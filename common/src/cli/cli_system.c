@@ -74,6 +74,10 @@ typedef struct {
     int      id;
 } name_id_t;
 
+// helper counting macros
+#define COUNT_L2(str_array) (sizeof(str_array) / sizeof(char *) - 1)
+#define L2_SLOTS(str_array) (COUNT_L2(str_array) == 0 ? 1 : COUNT_L2(str_array))
+
 // sentinel value to indicate an empty slot in the map
 #define MAP_EMPTY 0xFF
 
@@ -574,6 +578,10 @@ static const char **set_cmd_compos[] = {
     set_cmd_compo_1_1, // 'set log' path
 };
 #endif
+
+#define SET_LOG (1)
+#define SET_SIM (SET_LOG + L2_SLOTS(set_cmd_compo_1_1))
+
 static const char *set_cmd_log_args[] = {"domain", "entity", "level", nullptr};
 static const char *set_cmd_sim_phy_args[] = {"ramp", "mass", "cond", "power", "ambient", nullptr};
 static const char *set_cmd_sim_temp_args[] = {"latency", "target", "critical", "hyster", "cooldown", nullptr};
@@ -581,9 +589,11 @@ static const char *set_cmd_sim_temp_args[] = {"latency", "target", "critical", "
 // Level 3 Options:
 // These act as POSITIONAL HINTS because spec_idx is non-zero.
 static const comp_opt_t set_cmd_options[] = {
-    {1, set_cmd_log_args     }, // 'set log' -> act_idx 1
-    {2, set_cmd_sim_phy_args }, // 'set sim phy' -> act_idx 2
-    {3, set_cmd_sim_temp_args}, // 'set sim temp' -> act_idx 3
+    {SET_LOG,     set_cmd_log_args     }, // 'set log'
+#ifdef ENABLE_RTOS
+    {SET_SIM,     set_cmd_sim_phy_args }, // 'set sim phy'
+    {SET_SIM + 1, set_cmd_sim_temp_args}, // 'set sim temp'
+#endif
 };
 
 static const cmd_comp_t set_cmd_comp = {
@@ -600,8 +610,10 @@ void on_set_sim_command(EmbeddedCli *cli, char *args, int count);
 
 static void (*set_cmd_action[])(EmbeddedCli *cli, char *args, int count) = {
     nullptr,            // [0] Reserved
-    on_set_log_command, // [1] sel log <pos args> - matches act_idx 1
-    on_set_sim_command, // [2] set sim [options] - matches act_idx 2
+    on_set_log_command, // [1] sel log <pos args>
+#ifdef ENABLE_RTOS
+    on_set_sim_command, // [2] set sim [options]
+#endif
 };
 
 /**
@@ -610,7 +622,7 @@ static void (*set_cmd_action[])(EmbeddedCli *cli, char *args, int count) = {
  * [1] = log (action index 1)
  * [2] = sim (action index 2)
  */
-static const uint8_t set_cmd_action_idx[] = {0, 1, 2};
+static const uint8_t set_cmd_action_idx[] = {0, SET_LOG, SET_SIM};
 
 static const cmd_comp_desc_t set_cmd_desc = {
     .comp = set_cmd_comp,
@@ -642,6 +654,13 @@ static const char **show_cmd_compos[] = {
     single,             // No sub-args for 'levels'
 };
 
+#define SHOW_STATS (0)
+#define SHOW_CONFIG (SHOW_STATS + L2_SLOTS(show_cmd_compo_1_1))
+#define SHOW_VERSION (SHOW_CONFIG + L2_SLOTS(show_cmd_compo_1_2))
+#define SHOW_DOMAINS (SHOW_VERSION + L2_SLOTS(single))
+#define SHOW_ENTITIES (SHOW_DOMAINS + L2_SLOTS(single))
+#define SHOW_LEVELS (SHOW_ENTITIES + L2_SLOTS(single))
+
 /**
  * @brief Level 3 static options mapping.
  * Matches 1D action index to a list of optional terminal arguments.
@@ -650,12 +669,12 @@ static const char *options_stats_log[] = {"clear", nullptr};
 #ifdef ENABLE_RTOS
 static const char *options_config_sim[] = {"current", "default", "ranges", nullptr};
 static comp_opt_t  show_cmd_options[] = {
-    {0, options_stats_log }, // Maps to 'show stats log [clear]'
-    {5, options_config_sim}, // Maps to 'show config sim [current|default|ranges]'
+    {SHOW_STATS,      options_stats_log }, // Maps to 'show stats log [clear]'
+    {SHOW_CONFIG + 2, options_config_sim}, // Maps to 'show config sim [current|default|ranges]'
 };
 #else
 static const comp_opt_t show_cmd_options[] = {
-    {0, options_stats_log}, // Maps to 'show stats log [clear]'
+    {SHOW_STATS, options_stats_log}, // Maps to 'show stats log [clear]'
 };
 #endif
 
@@ -672,10 +691,14 @@ static const comp_opt_t show_cmd_options[] = {
  * 5        | entities | 1        | 9             | 9
  * 6        | levels   | 1        | 10            | 10
  */
-static const uint8_t show_cmd_action_idx[] = {0, 0, 3, 7, 8, 9, 10};
-
+static const uint8_t show_cmd_action_idx[] = {0, SHOW_STATS, SHOW_CONFIG, SHOW_VERSION, SHOW_DOMAINS, SHOW_ENTITIES, SHOW_LEVELS};
+#ifdef ENABLE_RTOS
+#define SHOW_OPTS (BIT(SHOW_STATS) | BIT(SHOW_CONFIG) | BIT(SHOW_CONFIG + 2))
+#else
+#define SHOW_OPTS (BIT(SHOW_STATS) | BIT(SHOW_CONFIG))
+#endif
 // Bitmask identifying which action indices support Level 3 options (show_cmd_options)
-static const uint32_t show_cmd_allow_opt = BIT(0) | BIT(3) | BIT(5);
+static const uint32_t show_cmd_allow_opt = SHOW_OPTS;
 
 /**
  * @brief Execution handlers mapped to the 1D Action Index.
@@ -687,8 +710,10 @@ static void (*show_cmd_action[])(EmbeddedCli *cli, char *args, int count) = {
 
     show_config,       // [3] show config (hybrid: leaf + path)
     show_config_short, // [4] show config short
-    show_config_sim,   // [5] show config sim [current|default|ranges]
-    show_config_log,   // [6] show config log
+#ifdef ENABLE_RTOS
+    show_config_sim, // [5] show config sim [current|default|ranges]
+#endif
+    show_config_log, // [6] show config log
 
     show_version,    // [7] show version
     show_domains,    // [8] show domains
@@ -932,7 +957,7 @@ static void cmd_dispatch(EmbeddedCli *cli, char *args, int count, const cmd_comp
     if (arg2 && !(help && count == 2))
         l2_idx = find_index_by_str(l2_subcmd, arg2);
 
-    if (l2_idx == -1 && is_hybrid)
+    if (l2_idx == -1 && is_hybrid && !arg2)
         l2_idx = 0;
 
     if (!arg2 || (help && count == 2)) {
@@ -949,7 +974,7 @@ static void cmd_dispatch(EmbeddedCli *cli, char *args, int count, const cmd_comp
         }
     }
 
-    if (l2_idx == -1 && !help)
+    if (l2_idx == -1 && !help && desc->comp.spec_idx == 0)
         return (void)embeddedCliPrint(cli, invalid);
 
     act_idx += (l2_idx != -1 ? l2_idx : 0);
@@ -963,6 +988,8 @@ static void cmd_dispatch(EmbeddedCli *cli, char *args, int count, const cmd_comp
         int num_tkns = help ? (count - 1) : count;
         int present = (num_tkns > path_tokens) ? (num_tkns - path_tokens) : 0;
 
+        if (!l3_opts && present > 0)
+            return (void)embeddedCliPrint(cli, invalid);
         if (l3_opts) {
             int max_allowed = 0;
             while (l3_opts[max_allowed])
@@ -985,9 +1012,10 @@ static void cmd_dispatch(EmbeddedCli *cli, char *args, int count, const cmd_comp
         }
 
         if (help || (l3_opts && present == 0)) {
-            int n = snprintf(msg, sizeof(msg), "%s", desc->comp.name);
+            const int limit = (is_hybrid && present > 0 && !is_arg_valid) ? path_tokens : num_tkns;
+            int       n = snprintf(msg, sizeof(msg), "%s", desc->comp.name);
 
-            for (int i = 1; i <= num_tkns; i++) {
+            for (int i = 1; i <= limit; i++) {
                 n += snprintf(msg + n, sizeof(msg) - n, " %s", embeddedCliGetToken(args, i));
             }
 
@@ -1010,7 +1038,7 @@ static void cmd_dispatch(EmbeddedCli *cli, char *args, int count, const cmd_comp
 
     if (help || (l3_opts && !arg3)) {
         int n = snprintf(msg, sizeof(msg), "%s %s", desc->comp.name, arg1);
-        if (arg2 && !(help && count == 2))
+        if (arg2 && l2_idx != -1)
             snprintf(msg + n, sizeof(msg) - n, " %s", arg2);
         do_help(cli, l3_opts, l3_opts != nullptr ? 2 : 0, msg); // Usage: [a|b|c]
         return;
