@@ -61,13 +61,13 @@ cli_data_t cli_data = {
 };
 
 #ifdef ENABLE_TEST
-#define CLI_MAX_BINDINGS MAX_BINDINGS
+#define CLI_MAX_BINDINGS (MAX_BINDINGS - 1)
 #define CLI_MEM_SIZE 4096
 #define MAP_APP_CONTEXT 0x3
 #define NUM_APP_CONTEXT 4
 #else
-#define CLI_MAX_BINDINGS 12
-#define CLI_MEM_SIZE 1024
+#define CLI_MAX_BINDINGS (12 - 1)
+#define CLI_MEM_SIZE 1216
 #define MAP_APP_CONTEXT 0x1
 #define NUM_APP_CONTEXT 1
 #endif
@@ -185,6 +185,7 @@ void set_main_commands(EmbeddedCli *cli)
             .binding = on_system_menu, // on entering system menu
         }
     );
+    assert((bid != BINDING_INVALID) && "[ERROR] Insufficient bindings. Please extend maxBindingsCount.");
     cli_data.bindings[0] = bid;
 }
 
@@ -367,17 +368,17 @@ int cli_init(void **cli_ctx)
 {
     EmbeddedCliConfig *config = embeddedCliDefaultConfig();
 
-    config->maxBindingCount = CLI_MAX_BINDINGS;
+    config->maxBindingsCount = CLI_MAX_BINDINGS;
     config->cliBuffer = cli_mem;
     config->cliBufferSize = CLI_MEM_SIZE;
 
     uint16_t requiredCliBufferSize = embeddedCliRequiredSize(config);
 
-    printf("[INFO] CLI buffer (%p) allocated " STR(CLI_MEM_SIZE) " required %u bytes", cli_mem, requiredCliBufferSize);
+    printf("[INFO] CLI buffer (%p) allocated " STR(CLI_MEM_SIZE) " required %u bytes\n", cli_mem, requiredCliBufferSize);
     EmbeddedCli *cli = embeddedCliNew(config);
 
     if (cli == nullptr) {
-        printf("%s: %d: [ERROR] embeddedCliNew: returned null\n", __func__, __LINE__);
+        printf("%s:%d: [ERROR] embeddedCliNew: returned null\n", __func__, __LINE__);
         return -1;
     }
     signal(SIGTERM, signal_handler);

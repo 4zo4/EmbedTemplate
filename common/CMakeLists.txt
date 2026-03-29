@@ -97,6 +97,11 @@ endif()
 # CLI uses embedded cli lib
 target_link_libraries(cli_lib PUBLIC embedded_cli_lib)
 
+target_include_directories(cli_lib BEFORE PRIVATE
+    ${MOCK_LIBC_INC_DIR}
+    ${TFA_LIBC_INC_DIR}
+)
+
 target_include_directories(cli_lib PRIVATE
     ${THIS_DIR}/include
     ${ARCH_INC_DIR}

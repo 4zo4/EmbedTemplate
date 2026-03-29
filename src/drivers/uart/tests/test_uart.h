@@ -6,4 +6,4 @@
 #define LOG_UART_TEST_DEBUG(...) LOG_ENTITY_DEBUG(ID_TEST(ENT_UART), __VA_ARGS__)
 
 #define UART_TEST_NUM 4
-extern test_desc_t UART_tests[UART_TEST_NUM];
+extern test_desc_t UART_tests[];

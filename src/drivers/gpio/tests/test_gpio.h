@@ -6,4 +6,4 @@
 #define LOG_GPIO_TEST_DEBUG(...) LOG_ENTITY_DEBUG(ID_TEST(ENT_GPIO), __VA_ARGS__)
 
 #define GPIO_TEST_NUM 7
-extern test_desc_t GPIO_tests[GPIO_TEST_NUM];
+extern test_desc_t GPIO_tests[];

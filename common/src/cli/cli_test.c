@@ -244,11 +244,9 @@ void set_test_commands(EmbeddedCli *cli)
     // clang-format off
     const size_t count = MAX2(MAX2(MAX_INFRA_INDEX, sys_max_tests),
                               MAX2(MAX_BLOCK_INDEX, dev_max_tests));
+    assert((count <= (sizeof(index_str) / sizeof(index_str[0]))) &&
+           "[ERROR] Insufficient index strings. Please extend index_str array.");
     // clang-format on
-    assert(
-        count <= sizeof(index_str) / sizeof(index_str[0]) &&
-        "[ERROR] Insufficient index strings. Please extend index_str array."
-    );
 
     // register each index as a stringified number
     for (unsigned int i = 0; i < count; i++) {

@@ -5,5 +5,5 @@
 #define LOG_CLI_TEST_INFO(...) LOG_ENTITY_INFO(ID_TEST(ENT_CLI), __VA_ARGS__)
 #define LOG_CLI_TEST_DEBUG(...) LOG_ENTITY_DEBUG(ID_TEST(ENT_CLI), __VA_ARGS__)
 
-#define CLI_TEST_NUM 1
-extern test_desc_t CLI_tests[CLI_TEST_NUM];
+#define CLI_TEST_NUM 18
+extern test_desc_t CLI_tests[];

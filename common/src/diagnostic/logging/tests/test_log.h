@@ -6,4 +6,4 @@
 #define LOG_TEST_DEBUG(...) LOG_ENTITY_DEBUG(ID_TEST(ENT_LOG), __VA_ARGS__)
 
 #define LOG_TEST_NUM 1
-extern test_desc_t LOG_tests[LOG_TEST_NUM];
+extern test_desc_t LOG_tests[];

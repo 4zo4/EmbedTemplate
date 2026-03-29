@@ -21,12 +21,16 @@ const char *cmd_list[] = {
     "show ?",
     "show config",
     "show config log",
+#ifdef ENABLE_RTOS
     "show config sim ?",
     "show config sim ranges",
+#endif
     "set log all all none",
     "set log sys cli error",
+#ifdef ENABLE_RTOS
     "set sim phy 1 2 3 4 5 ?",
     "set sim phy 1 2 3 4 5 6", // should error
+#endif
     "set log zzz ?",           // should error
     "set log test cli info",
 };
@@ -78,6 +82,23 @@ int test_cli(char *args)
 
 test_desc_t CLI_tests[] = {
     {"CLI_test", test_cli, true},
+    {"CLI_test2", nullptr, true},
+    {"CLI_test3", nullptr, true},
+    {"CLI_test4", nullptr, true},
+    {"CLI_test5", nullptr, true},
+    {"CLI_test6", nullptr, true},
+    {"CLI_test7", nullptr, true},
+    {"CLI_test8", nullptr, true},
+    {"CLI_test9", nullptr, true},
+    {"CLI_test10", nullptr, true},
+    {"CLI_test11", nullptr, true},
+    {"CLI_test12", nullptr, true},
+    {"CLI_test13", nullptr, true},
+    {"CLI_test14", nullptr, true},
+    {"CLI_test15", nullptr, true},
+    {"CLI_test16", nullptr, true},
+    {"CLI_test17", nullptr, true},
+    {"CLI_test18", nullptr, true},
 };
 
 static_assert(sizeof(CLI_tests) / sizeof(CLI_tests[0]) == CLI_TEST_NUM, "CLI tests out of range");
