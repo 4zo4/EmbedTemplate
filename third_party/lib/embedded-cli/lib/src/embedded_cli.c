@@ -474,13 +474,13 @@ EmbeddedCliConfig *embeddedCliDefaultConfig(void) {
     defaultConfig.historyBufferSize = HISTORY_BUF_DEFAULT;
     defaultConfig.cliBuffer = NULL;
     defaultConfig.cliBufferSize = 0;
-    defaultConfig.maxBindingCount = MAX_BINDINGS - CLI_INTERNAL_BINDING_COUNT;
+    defaultConfig.maxBindingsCount = MAX_BINDINGS - CLI_INTERNAL_BINDING_COUNT;
     defaultConfig.invitation = "> ";
     return &defaultConfig;
 }
 
 uint16_t embeddedCliRequiredSize(EmbeddedCliConfig *config) {
-    uint16_t bindingsCount = (uint16_t) (config->maxBindingCount + CLI_INTERNAL_BINDING_COUNT);
+    uint16_t bindingsCount = (uint16_t) (config->maxBindingsCount + CLI_INTERNAL_BINDING_COUNT);
 
     size_t totalBytes = 
         ALIGN_UP(sizeof(EmbeddedCli), 8) +
@@ -498,7 +498,7 @@ uint16_t embeddedCliRequiredSize(EmbeddedCliConfig *config) {
 EmbeddedCli *embeddedCliNew(EmbeddedCliConfig *config) {
     EmbeddedCli *cli = NULL;
 
-    uint16_t bindingsCount = (uint16_t) (config->maxBindingCount + CLI_INTERNAL_BINDING_COUNT);
+    uint16_t bindingsCount = (uint16_t) (config->maxBindingsCount + CLI_INTERNAL_BINDING_COUNT);
 
     size_t totalSize = embeddedCliRequiredSize(config);
     totalSize = ALIGN_UP(totalSize, 8);
@@ -508,7 +508,7 @@ EmbeddedCli *embeddedCliNew(EmbeddedCliConfig *config) {
         return NULL; // Return null to prevent memory corruption
     }
 
-    if (config->maxBindingCount > MAX_BINDINGS) {
+    if (config->maxBindingsCount > MAX_BINDINGS) {
         return NULL; // Return null to prevent memory corruption
     }
 
@@ -555,7 +555,7 @@ EmbeddedCli *embeddedCliNew(EmbeddedCliConfig *config) {
     impl->rxBuffer.back = 0;
     impl->cmdMaxSize = config->cmdBufferSize;
     impl->bindingsCount = 0;
-    impl->maxBindingsCount = (uint16_t) (config->maxBindingCount + CLI_INTERNAL_BINDING_COUNT);
+    impl->maxBindingsCount = (uint16_t) (config->maxBindingsCount + CLI_INTERNAL_BINDING_COUNT);
     impl->lastChar = '\0';
     impl->invitation = config->invitation;
     impl->cursorPos = 0;
@@ -616,7 +616,7 @@ void embeddedCliProcess(EmbeddedCli *cli) {
 
 uint16_t embeddedCliAddBinding(EmbeddedCli *cli, CliCommandBinding binding) {
     PREPARE_IMPL(cli);
-    if (impl->bindingsCount == impl->maxBindingsCount)
+    if (impl->bindingsCount == (impl->maxBindingsCount - CLI_INTERNAL_BINDING_COUNT))
         return BINDING_INVALID;
 
     int bindingsCount = impl->bindingsCount;

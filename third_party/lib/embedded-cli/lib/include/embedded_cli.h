@@ -31,7 +31,7 @@ extern "C" {
 #define BYTES_TO_CLI_UINTS(bytes) \
   (((bytes) + CLI_UINT_SIZE - 1)/CLI_UINT_SIZE)
 
-#define MAX_BINDINGS 48
+#define MAX_BINDINGS 76
 #define MAX_ARGS_COMPLETIONS 8
 
 // history buffer size must be power of two
@@ -159,7 +159,7 @@ struct EmbeddedCliConfig {
      * Cli increases takes extra bindings for internal commands:
      * - help
      */
-    uint16_t maxBindingCount;
+    uint16_t maxBindingsCount;
 
     /**
      * Buffer to use for cli and all internal structures. If NULL, memory will
