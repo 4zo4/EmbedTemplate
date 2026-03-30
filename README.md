@@ -81,6 +81,8 @@ and for code development, install the pre-commit hook:
 - **Zero-Copy Circular History**: Implements a ring buffer for command history, utilizing backward traversal and sequential duplicate suppression to eliminate `memmove` overhead.
 - **Static Allocation**: Zero-heap design ensuring reliability for bare-metal or RTOS environments.
 
+[[CLI Guide]](./common/src/cli/README.md)
+
 ### Diagnostic Logger
 - **In-Memory & Serial Logging**: Structured logging for real-time firmware diagnostics and post-mortem analysis. The logger implementation is lock-free, multi-writer, and interrupt-safe.
 - **Portability**: Shared infrastructure used across both drivers and system-level code.
