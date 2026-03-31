@@ -19,6 +19,8 @@ typedef enum {
     MAX_DOMAIN
 } domain_e;
 
+#define NUM_DOMAINS MAX_DOMAIN
+
 // Entity definitions can be added here.
 // Follow the same pattern of defining a unique marker for string concatenation and
 // an associated ID for log filtering.
@@ -45,6 +47,8 @@ typedef enum {
     ENTITY_UART,
     MAX_ENTITY
 } entity_e;
+
+#define NUM_ENTITIES MAX_ENTITY
 
 typedef enum {
     CLI = 0,

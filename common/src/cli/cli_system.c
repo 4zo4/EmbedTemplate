@@ -81,8 +81,8 @@ typedef struct {
 // sentinel value to indicate an empty slot in the map
 #define MAP_EMPTY 0xFF
 
-#define DOMAIN_MAP_SIZE POW2(MAX_DOMAIN * 2)
-#define ENTITY_MAP_SIZE POW2(MAX_ENTITY * 2)
+#define DOMAIN_MAP_SIZE POW2(NUM_DOMAINS * 2)
+#define ENTITY_MAP_SIZE POW2(NUM_ENTITIES * 2)
 #define LOG_LEVEL_MAP_SIZE POW2(NUM_LOG_LEVELS * 2)
 
 #define DOMAIN_MAP_MASK (DOMAIN_MAP_SIZE - 1)
@@ -96,9 +96,9 @@ static_assert((LOG_LEVEL_MAP_SIZE & LOG_LEVEL_MAP_MASK) == 0, "LOG_LEVEL_MAP_SIZ
 // -- Globals --
 
 static uint8_t   domain_map[DOMAIN_MAP_SIZE];
-static name_id_t domain_tbl[MAX_DOMAIN - 1];
+static name_id_t domain_tbl[NUM_DOMAINS - 1]; // exclude DOMAIN_NONE
 static uint8_t   entity_map[ENTITY_MAP_SIZE];
-static name_id_t entity_tbl[MAX_ENTITY];
+static name_id_t entity_tbl[NUM_ENTITIES];
 static uint8_t   level_map[LOG_LEVEL_MAP_SIZE];
 static name_id_t level_tbl[NUM_LOG_LEVELS];
 static const int level_id[NUM_LOG_LEVELS] = {LOG_LEVEL_NONE, LOG_LEVEL_CRITICAL, LOG_LEVEL_ERROR, LOG_LEVEL_WARNING, LOG_LEVEL_INFO, LOG_LEVEL_DEBUG};
@@ -304,10 +304,10 @@ void show_config_log(EmbeddedCli *cli, char *args, int count)
     alignas(8) char tmp[64 + 8];
     bool            enabled = false;
 
-    for (int did = 1; did < MAX_DOMAIN; did++) {
+    for (int did = 1; did < NUM_DOMAINS; did++) {
         if (!(dom_map_en & BIT(did)))
             continue;
-        for (int eid = 0; eid < MAX_ENTITY; eid++) {
+        for (int eid = 0; eid < NUM_ENTITIES; eid++) {
             if (!(ent_map_en & BIT(eid)))
                 continue;
             int level = log_get_level(did, eid);
@@ -343,7 +343,7 @@ void show_domains(EmbeddedCli *cli, char *args, int count)
     char msg[128] = "Domains:";
     int  n = 8;
 
-    for (int did = 1; did < MAX_DOMAIN; did++) {
+    for (int did = 1; did < NUM_DOMAINS; did++) {
         if (!(dom_map_en & BIT(did)))
             continue;
         n += snprintf(msg + n, sizeof(msg) - n, " %s", domain_name((uint8_t)did, 1));
@@ -356,7 +356,7 @@ void show_entities(EmbeddedCli *cli, char *args, int count)
     char msg[128] = "Entities:";
     int  n = 9;
 
-    for (int eid = 1; eid < MAX_ENTITY; eid++) {
+    for (int eid = 1; eid < NUM_ENTITIES; eid++) {
         if (!(ent_map_en & BIT(eid)))
             continue;
         n += snprintf(msg + n, sizeof(msg) - n, " %s", entity_name((uint8_t)eid, 1));
@@ -404,14 +404,14 @@ void do_log_help(EmbeddedCli *cli, const char **matches, int count, uint8_t pos)
         n += snprintf(msg + n, sizeof(msg) - n, "all|");
 
     if (pos == 2) {
-        for (int i = 1; i < MAX_DOMAIN; i++) {
+        for (int i = 1; i < NUM_DOMAINS; i++) {
             if (!(dom_map_en & BIT(i)))
                 continue;
             n += snprintf(msg + n, sizeof(msg) - n, "%s", domain_name((uint8_t)i, 0));
             msg[n++] = '|';
         }
     } else if (pos == 3) {
-        for (int i = 0; i < MAX_ENTITY; i++) {
+        for (int i = 0; i < NUM_ENTITIES; i++) {
             if (!(ent_map_en & BIT(i)))
                 continue;
             n += snprintf(msg + n, sizeof(msg) - n, "%s", entity_name((uint8_t)i, 0));
@@ -438,12 +438,12 @@ bool set_log_validate(const char *token, uint8_t pos)
     }
 
     if (pos == 2) {
-        for (int did = 1; did < MAX_DOMAIN; did++) {
+        for (int did = 1; did < NUM_DOMAINS; did++) {
             if ((dom_map_en & BIT(did)) && strcmp(token, domain_name(did, 0)) == 0)
                 return true;
         }
     } else if (pos == 3) {
-        for (int eid = 0; eid < MAX_ENTITY; eid++) {
+        for (int eid = 0; eid < NUM_ENTITIES; eid++) {
             if ((ent_map_en & BIT(eid)) && strcmp(token, entity_name(eid, 0)) == 0)
                 return true;
         }
@@ -482,7 +482,7 @@ void set_log_completion(EmbeddedCli *cli, const char *token, uint8_t pos)
     }
 
     if (pos == 2) {
-        for (int did = 1; did < MAX_DOMAIN; did++) {
+        for (int did = 1; did < NUM_DOMAINS; did++) {
             if (!(dom_map_en & BIT(did)))
                 continue;
             if (count == 8)
@@ -494,7 +494,7 @@ void set_log_completion(EmbeddedCli *cli, const char *token, uint8_t pos)
             }
         }
     } else if (pos == 3) {
-        for (int eid = 0; eid < MAX_ENTITY; eid++) {
+        for (int eid = 0; eid < NUM_ENTITIES; eid++) {
             if (!(ent_map_en & BIT(eid)))
                 continue;
             if (count == 8)
@@ -565,7 +565,6 @@ static const char  *set_cmd_compo_1[] = {"log", "sim", nullptr};    // Level 1: 
 static const char  *set_cmd_compo_1_1[] = {"", nullptr};            // Level 2: 'log' (handled by spec_idx 1)
 static const char  *set_cmd_compo_1_2[] = {"phy", "temp", nullptr}; // Level 2: 'sim' options 'set sim phy' | 'set sim temp'
 static const char **set_cmd_compos[] = {
-    set_cmd_compo_1,   // Root of the 'set' command
     set_cmd_compo_1_1, // 'set log' path
     set_cmd_compo_1_2, // 'set sim' path
     single,
@@ -574,7 +573,6 @@ static const char **set_cmd_compos[] = {
 static const char  *set_cmd_compo_1[] = {"log", nullptr}; // Level 1: Sub-commands
 static const char  *set_cmd_compo_1_1[] = {"", nullptr};  // Level 2: 'log' (handled by spec_idx 1)
 static const char **set_cmd_compos[] = {
-    set_cmd_compo_1,   // Root of the 'set' command
     set_cmd_compo_1_1, // 'set log' path
 };
 #endif
@@ -645,7 +643,6 @@ static const char *show_cmd_compo_1_2[] = {"", "short", "sim", "log", nullptr}; 
 static const char *show_cmd_compo_1_2[] = {"", "short", "log", nullptr}; // 'show config ...'
 #endif
 static const char **show_cmd_compos[] = {
-    show_cmd_compo_1,   // Root Level 1 options for the 'show' command
     show_cmd_compo_1_1, // Sub-args for 'stats'
     show_cmd_compo_1_2, // Sub-args for 'config'
     single,             // No sub-args for 'version'
@@ -853,9 +850,9 @@ static void do_cmd_arg_completion_dispatch(EmbeddedCli *cli, const char *token, 
         for (int i = 0; comp->level1[i] != nullptr; i++) {
             if (arg && strncmp(arg, comp->level1[i], strlen(arg)) == 0) {
                 bool         is_full_match = (strlen(arg) == strlen(comp->level1[i]));
-                const char **sub = comp->level2[i + 1];
+                const char **l2_subcmd = comp->level2[i];
 
-                bool has_options = (sub && sub[0] && (sub[0][0] != '\0' || sub[1] != nullptr));
+                bool has_options = (l2_subcmd && l2_subcmd[0] && (l2_subcmd[0][0] != '\0' || l2_subcmd[1] != nullptr));
 
                 if (!has_options || (is_full_match && !has_options)) {
                     goto is_special_handling;
@@ -864,8 +861,8 @@ static void do_cmd_arg_completion_dispatch(EmbeddedCli *cli, const char *token, 
                 if (help) {
                     char msg[64];
                     snprintf(msg, sizeof(msg), "%s %s", comp->name, comp->level1[i]);
-                    do_help(cli, sub, false, msg);
-                } else if (!do_sub_completion(cli, sub, token)) {
+                    do_help(cli, l2_subcmd, false, msg);
+                } else if (!do_sub_completion(cli, l2_subcmd, token)) {
                     goto is_special_handling;
                 }
                 return;
@@ -882,25 +879,25 @@ static void do_cmd_arg_completion_dispatch(EmbeddedCli *cli, const char *token, 
         int l1_idx = find_index_by_str(comp->level1, arg1);
 
         if (l1_idx != -1) {
-            const char **sub = comp->level2[l1_idx + 1];
-            int          l2_idx = find_index_by_str(sub, arg2);
+            const char **l2_subcmd = comp->level2[l1_idx];
+            int          l2_idx = find_index_by_str(l2_subcmd, arg2);
 
-            bool is_hybrid = (sub && sub[0] && sub[0][0] == '\0');
+            bool is_hybrid = (l2_subcmd && l2_subcmd[0] && l2_subcmd[0][0] == '\0');
             if (l2_idx == -1 && is_hybrid && comp->spec_idx != 0)
                 goto is_special_handling;
 
             if (l2_idx != -1 && action_idx != nullptr) {
                 int          act_idx = action_idx[l1_idx + 1] + l2_idx;
-                const char **opt = (const char **)find_by_index(comp->level3, comp->opt_size, act_idx);
+                const char **l3_opts = (const char **)find_by_index(comp->level3, comp->opt_size, act_idx);
 
-                if (opt) {
+                if (l3_opts) {
                     if (help) {
                         char msg[64];
                         snprintf(msg, sizeof(msg), "%s %s %s", comp->name, arg1, arg2);
-                        do_help(cli, opt, false, msg);
+                        do_help(cli, l3_opts, false, msg);
                         return;
                     }
-                    if (do_sub_completion(cli, opt, token)) {
+                    if (do_sub_completion(cli, l3_opts, token)) {
                         return;
                     }
                     goto is_special_handling;
@@ -947,7 +944,7 @@ static void cmd_dispatch(EmbeddedCli *cli, char *args, int count, const cmd_comp
         return (void)embeddedCliPrint(cli, invalid);
 
     int          act_idx = desc->act_idx ? desc->act_idx[l1_idx + 1] : (l1_idx + 1);
-    const char **l2_subcmd = desc->comp.level2[l1_idx + 1];
+    const char **l2_subcmd = desc->comp.level2[l1_idx];
     bool         has_l2 = (l2_subcmd && l2_subcmd[0] && l2_subcmd[0][0] != '\0');
 
     const char *arg2 = (count >= 2) ? embeddedCliGetToken(args, 2) : nullptr;
@@ -1257,14 +1254,14 @@ void cli_log_cmd_init(void)
     memset(entity_map, MAP_EMPTY, sizeof(entity_map));
     memset(level_map, MAP_EMPTY, sizeof(level_map));
 
-    for (int did = 1; did < MAX_DOMAIN; did++) {
+    for (int did = 1; did < NUM_DOMAINS; did++) {
         if (!(dom_map_en & BIT(did)))
             continue;
         name = domain_name((uint8_t)did, 1);
         insert_name(name, did, TYPE_DOMAIN, did - 1);
     }
 
-    for (int eid = 0; eid < MAX_ENTITY; eid++) {
+    for (int eid = 0; eid < NUM_ENTITIES; eid++) {
         if (!(ent_map_en & BIT(eid)))
             continue;
         name = entity_name((uint8_t)eid, 1);
@@ -1303,10 +1300,10 @@ void on_set_log_command(EmbeddedCli *cli, char *args, int count)
         return;
     }
 
-    for (int d = 1; d < MAX_DOMAIN; d++) {
+    for (int d = 1; d < NUM_DOMAINS; d++) {
         if (!all_domains && d != did)
             continue;
-        for (int e = 0; e < MAX_ENTITY; e++) {
+        for (int e = 0; e < NUM_ENTITIES; e++) {
             if (!all_entities && e != eid)
                 continue;
             log_set_level(d, e, level);
