@@ -25,8 +25,19 @@ void SysTick_Handler(void);
 
 extern uint32_t _sdata, _edata, _sbss, _ebss, _sidata, _estack;
 
+#define SCB_CPACR (*((volatile uint32_t *)0xE000ED88))
+
+static inline void fpu_enable(void)
+{
+    /* Set bits 20-23 to 11 (Full Access) for CP10 and CP11 */
+    SCB_CPACR |= (0xF << 20); 
+    __asm volatile ("dsb; isb");
+}
+
 void reset_handler(void)
 {
+    fpu_enable();
+
     // Copy .data from FLASH to RAM
     uint32_t *src = &_sidata;
     uint32_t *dst = &_sdata;
