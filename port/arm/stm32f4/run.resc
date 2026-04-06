@@ -1,0 +1,14 @@
+$bin?=@build_arm/port/runner.elf
+mach create "stm32f4"
+machine LoadPlatformDescription @platforms/cpus/stm32f4.repl
+machine LoadPlatformDescription @port/arm/stm32f4/dwt.repl
+
+sysbus SilenceRange <0x40002C00 0x8>
+sysbus.cpu PerformanceInMips 168
+sysbus LoadELF $bin
+
+#machine StartGdbServer 3333
+emulation CreateServerSocketTerminal 2222 "terminal"
+connector Connect sysbus.usart1 terminal
+sysbus.usart1 BaudRate 115200
+start

@@ -30,6 +30,7 @@
 #include "semphr.h"
 #include "task.h"
 
+#include "arch_ops.h"
 #include "gpio_demo_regs.h"
 #include "gpio.h"
 #include "log.h"
@@ -151,21 +152,26 @@ typedef struct temp_reg_cfg_s {
 } temp_reg_cfg_t;
 
 // prototypes without include file
+
 // Mock alarm interrupt and periodic temperature update signal from the hardware simulator to the temperature regulation
-// vGPIOControlTask.
+// vGPIOControlTask for FreeRTOS posix port.
 void init_mock_interrupts(void);
 // CLI Interface (defined in cli_main.c)
 int      cli_init(void **cli_ctx);
 bool     cli_run(void *cli_ctx);
 void     cli_exit(void *cli_ctx);
+void     init_uart(void);
+void     init_timestamp(void);
 uint64_t get_timestamp48(void);
+void     init_watchdog(void);
 
 static void reset_sim_state(bool phy);
 
 // -- Globals --
 
-extern bool              keep_running;
+extern volatile bool     keep_running;
 extern SemaphoreHandle_t xInterruptSem;
+TaskHandle_t             xCliHandle = nullptr;
 
 #define NORMAL 0
 #define PAUSE 1
@@ -178,7 +184,6 @@ static bool suspended = true;
 #define CLI_STACK_SIZE (configMINIMAL_STACK_SIZE * 4)
 static StackType_t  cliStack[CLI_STACK_SIZE];
 static StaticTask_t cliTcb;
-static TaskHandle_t xCliHandle = nullptr;
 // Ctrl Task resources
 #define CTRL_STACK_SIZE (configMINIMAL_STACK_SIZE * 2) // 2x stack for control logic
 static StackType_t  ctrlStack[CTRL_STACK_SIZE];
@@ -222,11 +227,15 @@ void vApplicationGetTimerTaskMemory(
 // FreeRTOS Idle Hook to allow the host CPU to rest when idle
 void vApplicationIdleHook(void)
 {
+#ifdef BARE_METAL
+    HALT_CPU();
+#else
     /*
      * Force the Posix thread to sleep for a short duration.
      * 1000 microseconds = 1ms
      */
     usleep(1000);
+#endif
 }
 
 bool is_suspended(void)
@@ -264,7 +273,11 @@ bool sim_pause(void)
     // Sleep until the hardware simulator acknowledges the mode change
     system_mode = PAUSE;
     while (system_mode != PAUSE_ACK) {
+#ifdef BARE_METAL
+        vTaskDelay(pdMS_TO_TICKS(1));
+#else
         usleep(1000);
+#endif
     }
     return true;
 }
@@ -758,8 +771,13 @@ void vHardwareSimTask(void *pvParameters)
                 // run_temperature_regulation)
                 if (ms_counter > sim_ctx.phy.sensor_latency_ms >> 1)
                     ms_counter = 0;
+#ifdef BARE_METAL
+                if (xCtrlHandle != nullptr)
+                    xTaskNotifyGive(xCtrlHandle);
+#else
                 // Trigger the Alarm IRQ via Unix Signal (SIGIO)
                 kill(getpid(), SIGIO);
+#endif
                 LOG_SYS_DEBUG("Over-Temp Alarm Triggering at %d°C", (sim_ctx.temp_mC / 1000));
             }
         } else {
@@ -770,7 +788,12 @@ void vHardwareSimTask(void *pvParameters)
         // --- SENSOR: Update Input Register every sensor_latency ms ---
         if (ms_counter >= sim_ctx.phy.sensor_latency_ms && !done) {
             ms_counter = 0;
+#ifdef BARE_METAL
+            if (xCtrlHandle != nullptr)
+                xTaskNotifyGive(xCtrlHandle);
+#else
             kill(getpid(), SIGIO); // Yield via Unix Signal (SIGIO)
+#endif
         }
         // --- WATCHDOG ---
         if (gpio->wdt_cfg.f.en) {
@@ -819,7 +842,11 @@ void vGPIOControlTask(void *pvParameters)
     gpio_wdt_setup(gpio, 150);
 
     for (;;) {
+#ifdef BARE_METAL
+        if (ulTaskNotifyTake(pdTRUE, portMAX_DELAY) > 0) {
+#else
         if (xSemaphoreTake(xInterruptSem, portMAX_DELAY) == pdPASS) {
+#endif
             run_temperature_regulation(gpio);
             gpio_wdt_kick(gpio); // Reset the Watchdog timer on each regulation cycle
         }
@@ -831,12 +858,17 @@ int main(void)
 {
     alignas(8) static volatile gpio_ctrl_t gpio; // Local instance of GPIO registers -
                                                  // simulated memory-mapped hardware
-    get_timestamp48();                           // start time
-    gpio_set_regs(&gpio);                        // Set the base address for the GPIO driver
-
+#ifdef BARE_METAL
+    init_timestamp();
+    init_uart();
+    init_watchdog();
+#endif
+    get_timestamp48();    // start time
+    gpio_set_regs(&gpio); // Set the base address for the GPIO driver
+#ifndef BARE_METAL
     // Create the binary semaphore for interrupt synchronization
     init_mock_interrupts();
-
+#endif
     // Create the CLI Task
     xCliHandle = xTaskCreateStatic(
         vCLITask, "CLITask", CLI_STACK_SIZE, nullptr,
@@ -868,7 +900,7 @@ int main(void)
         printf("[RTOS] Failed to create Hardware Simulator task\n");
         return -1;
     }
-
+#ifndef BARE_METAL
     sigset_t set;
     sigemptyset(&set);
     sigaddset(&set, SIGIO);                  // Unblock SIGIO for interrupt handling
@@ -876,13 +908,12 @@ int main(void)
     sigprocmask(SIG_UNBLOCK, &set, nullptr); // Unblock in main thread (POSIX)
     // Unblock in all threads (POSIX)
     pthread_sigmask(SIG_UNBLOCK, &set, nullptr);
-
+#endif
+    printf("[RTOS] Starting Scheduler...\n");
     /*
      * Start the scheduler.
      * In the POSIX port, this will take over the main thread.
      */
-    printf("[RTOS] Starting Scheduler...\n");
-
     vTaskStartScheduler();
 
     // Should never reach here

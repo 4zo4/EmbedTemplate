@@ -1,0 +1,7 @@
+set(TARGET_CHIP_SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/port.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/startup.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/syscalls.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/time.c"
+    PARENT_SCOPE
+)
