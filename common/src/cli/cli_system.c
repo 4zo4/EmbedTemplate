@@ -60,19 +60,32 @@ typedef struct cmd_comp_s {
     uint16_t          spec_idx; // index into specs
 } cmd_comp_t;
 
+typedef struct opt_mask_s {
+    uint16_t enable; // bitmask identifying if options are enabled for the command
+    uint16_t must;   // bitmask identifying if options are required for the command
+} opt_mask_t;
+
 typedef struct cmd_comp_desc_s {
-    cmd_comp_t     comp;
-    const uint8_t *act_idx;  // command's action index table
-    const uint32_t opt_mask; // options enabled mask
+    cmd_comp_t       comp;
+    const uint8_t   *act_idx;  // command's action index table
+    const opt_mask_t opt_mask; // options mask
 
     void (**action)(EmbeddedCli *cli, char *args, int count);
 } cmd_comp_desc_t;
 
 // for name to id matching e.g., "CRITICAL" to LOG_LEVEL_CRITICAL (10)
-typedef struct {
+typedef struct name_id_s {
     uint32_t hash;
     int      id;
 } name_id_t;
+
+#ifdef DEBUG
+#define DEF_BREADCRUMB(breadcrumb, size) uint##size##_t breadcrumb = 0
+#define ADD_BREADCRUMB(breadcrumb, step) breadcrumb |= BIT(step)
+#else
+#define DEF_BREADCRUMB(breadcrumb, size) do {} while(0)
+#define ADD_BREADCRUMB(breadcrumb, step) do {} while(0)
+#endif
 
 // helper counting macros
 #define COUNT_L2(str_array) (sizeof(str_array) / sizeof(char *) - 1)
@@ -695,7 +708,10 @@ static const uint8_t show_cmd_action_idx[] = {0, SHOW_STATS, SHOW_CONFIG, SHOW_V
 #define SHOW_OPTS (BIT(SHOW_STATS) | BIT(SHOW_CONFIG))
 #endif
 // Bitmask identifying which action indices support Level 3 options (show_cmd_options)
-static const uint32_t show_cmd_allow_opt = SHOW_OPTS;
+static const opt_mask_t show_cmd_opt_mask = {
+    .enable = SHOW_OPTS,
+    .must = SHOW_OPTS & ~BIT(SHOW_STATS), // 'show stats log' doesn't require options
+};
 
 /**
  * @brief Execution handlers mapped to the 1D Action Index.
@@ -730,7 +746,7 @@ static const cmd_comp_desc_t show_cmd_desc = {
     },
     // clang-format on
     .act_idx = show_cmd_action_idx,
-    .opt_mask = show_cmd_allow_opt,
+    .opt_mask = show_cmd_opt_mask,
     .action = show_cmd_action,
 };
 
@@ -938,6 +954,7 @@ static void cmd_dispatch(EmbeddedCli *cli, char *args, int count, const cmd_comp
         return;
     }
 
+    DEF_BREADCRUMB(breadcrumb, 8);
     const char *arg1 = embeddedCliGetToken(args, 1);
     int         l1_idx = find_index_by_str(desc->comp.level1, arg1);
     if (l1_idx == -1)
@@ -957,10 +974,12 @@ static void cmd_dispatch(EmbeddedCli *cli, char *args, int count, const cmd_comp
     if (l2_idx == -1 && is_hybrid && !arg2)
         l2_idx = 0;
 
+    ADD_BREADCRUMB(breadcrumb, 0);
     if (!arg2 || (help && count == 2)) {
         if (!has_l2 && desc->comp.spec_idx == 0 && !help)
             goto action_run;
 
+        ADD_BREADCRUMB(breadcrumb, 1);
         if (!arg2 && is_hybrid && desc->comp.spec_idx == 0)
             goto action_run;
 
@@ -977,7 +996,7 @@ static void cmd_dispatch(EmbeddedCli *cli, char *args, int count, const cmd_comp
     act_idx += (l2_idx != -1 ? l2_idx : 0);
 
     const char **l3_opts = nullptr;
-    if (desc->comp.spec_idx != 0 || (desc->opt_mask & BIT(act_idx)))
+    if (desc->comp.spec_idx != 0 || (desc->opt_mask.enable & BIT(act_idx)))
         l3_opts = (const char **)find_by_index(desc->comp.level3, desc->comp.opt_size, act_idx);
 
     if (desc->comp.spec_idx != 0) {
@@ -1028,12 +1047,13 @@ static void cmd_dispatch(EmbeddedCli *cli, char *args, int count, const cmd_comp
             return;
         }
 
+        ADD_BREADCRUMB(breadcrumb, 2);
         goto action_run;
     }
 
     const char *arg3 = (count >= 3) ? embeddedCliGetToken(args, 3) : nullptr;
 
-    if (help || (l3_opts && !arg3)) {
+    if (help || (l3_opts && !arg3 && (desc->opt_mask.must & BIT(act_idx)))) {
         int n = snprintf(msg, sizeof(msg), "%s %s", desc->comp.name, arg1);
         if (arg2 && l2_idx != -1)
             snprintf(msg + n, sizeof(msg) - n, " %s", arg2);
@@ -1052,6 +1072,7 @@ static void cmd_dispatch(EmbeddedCli *cli, char *args, int count, const cmd_comp
         return (void)embeddedCliPrint(cli, error);
 
 action_run:
+    ADD_BREADCRUMB(breadcrumb, 3);
     if (desc->action[act_idx])
         desc->action[act_idx](cli, args, count);
 }

@@ -47,7 +47,7 @@ typedef struct log_buf_s {
 } log_buf_t;
 
 typedef struct log_stats_atomic_s {
-    atomic_uint_least64_t sum;
+    atomic_uint_least32_t sum;
     atomic_uint_least32_t drop_cnt;
 } log_stats_atomic_t;
 

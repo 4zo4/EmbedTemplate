@@ -1,14 +1,6 @@
 #include <stdio.h>
 #include <unistd.h>
 
-#ifdef BARE_METAL
-int fflush(void *stream)
-{
-    (void)stream;
-    return 0;
-}
-#endif
-
 #ifndef BARE_METAL
 int putchar(int c)
 {
@@ -17,4 +9,23 @@ int putchar(int c)
         return -1;
     return c;
 }
+
+int getchar(void)
+{
+    char ch;
+    long result = read(STDIN_FILENO, &ch, 1);
+    if (result == 1)
+        return (int)ch;
+    else
+        return EOF;
+}
 #endif
+
+int atoi(const char *s)
+{
+    int num = 0;
+    while (*s >= '0' && *s <= '9') {
+        num = num * 10 + (*s++ - '0');
+    }
+    return num;
+}

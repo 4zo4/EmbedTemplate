@@ -7,3 +7,4 @@
 #endif
 
 long write(int fd, const void *buf, unsigned long count);
+long read(int fd, const void *buf, unsigned long count);

@@ -21,6 +21,8 @@ const char *cmd_list[] = {
     "show ?",
     "show config",
     "show config log",
+    "show stats log ?",
+    "show stats log",
 #ifdef ENABLE_RTOS
     "show config sim ?",
     "show config sim ranges",

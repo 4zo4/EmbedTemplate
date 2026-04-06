@@ -5,7 +5,7 @@
 #pragma once
 
 typedef struct log_stats_s {
-    uint64_t sum;
+    uint32_t sum;
     uint32_t drop_cnt;
 } log_stats_t;
 

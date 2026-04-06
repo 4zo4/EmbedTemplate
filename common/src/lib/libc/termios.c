@@ -2,6 +2,10 @@
 #include <stdint.h>
 #include <termios.h>
 
+// prototypes without include file
+void uart_set_echo(bool enabled);
+void uart_set_buffered_mode(bool enabled);
+
 int tcgetattr(int fd, struct termios *termios_p)
 {
     if (!termios_p)
@@ -16,11 +20,11 @@ int tcsetattr(int fd, int optional_actions, const struct termios *termios_p)
 
     // Bridge logic: If the CLI turns off ECHO, tell the HW/Driver
     bool echo_enabled = (termios_p->c_lflag & ECHO) != 0;
-    // uart_set_echo(echo_enabled);
+    uart_set_echo(echo_enabled);
 
     // If the CLI turns off ICANON, the UART driver remains in char-by-char mode
     bool canon_enabled = (termios_p->c_lflag & ICANON) != 0;
-    // uart_set_buffered_mode(canon_enabled);
+    uart_set_buffered_mode(canon_enabled);
 
     return 0;
 }

@@ -35,6 +35,7 @@ void on_enter_tests(EmbeddedCli *cli, char *args, void *context);
 void on_system_menu(EmbeddedCli *cli, char *args, void *context);
 void cli_log_cmd_init(void);
 void run_cli_tests(EmbeddedCli *cli);
+bool stdin_ready(int timeout_ms);
 
 // Logging Macros for CLI specific System-Level Messages
 #define LOG_CLI_CRITICAL(...) LOG_ENTITY_CRITICAL(ID_SYS(ENT_CLI), __VA_ARGS__)
@@ -43,9 +44,18 @@ void run_cli_tests(EmbeddedCli *cli);
 #define LOG_CLI_INFO(...) LOG_ENTITY_INFO(ID_SYS(ENT_CLI), __VA_ARGS__)
 #define LOG_CLI_DEBUG(...) LOG_ENTITY_DEBUG(ID_SYS(ENT_CLI), __VA_ARGS__)
 
+#ifdef BARE_METAL
+#ifndef VMIN
+#define VMIN 16
+#endif
+#ifndef VTIME
+#define VTIME 17
+#endif
+#endif
+
 // -- Globals --
 
-bool keep_running = true;
+bool volatile keep_running = true;
 
 cli_data_t cli_data = {
     .msg_buf = {0},
@@ -369,7 +379,7 @@ int cli_init(void **cli_ctx)
     EmbeddedCliConfig *config = embeddedCliDefaultConfig();
 
     config->maxBindingsCount = CLI_MAX_BINDINGS;
-    config->cliBuffer = cli_mem;
+    config->cliBuffer = (typeof(config->cliBuffer))cli_mem;
     config->cliBufferSize = CLI_MEM_SIZE;
 
     uint16_t requiredCliBufferSize = embeddedCliRequiredSize(config);
@@ -456,7 +466,7 @@ bool cli_run(void *cli_ctx)
     process_logs();
     if (!stdin_ready(20))
         return true;
-    char c = (char)getc(stdin);
+    char c = (char)getchar();
     if (c == EOF)
         return false;
 
