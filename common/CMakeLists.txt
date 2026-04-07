@@ -60,8 +60,8 @@ target_compile_options(tfa_libc_lib PRIVATE -ffreestanding -nostdlib -fno-builti
 
 # --- FreeRTOS (freertos_lib) ---
 if(RTOS)
-    if(BARE_METAL)
-        # The path to the FreeRTOS port sources is defined by the FREERTOS_PORT variable in <arch>.cmake toolchain
+    if(BARE_METAL)# The path to the FreeRTOS port sources is defined by the FREERTOS_PORT variable in port/<arch>/<chip>/CMakeLists.txt
+        
         set(FREERTOS_PORT_DIR "${FREERTOS_DIR}/portable/GCC/${FREERTOS_PORT}")
         set(FREERTOS_MOCK_SOURCES "")
         set(FREERTOS_PORT_SOURCES ${FREERTOS_PORT_DIR}/port.c)
@@ -130,6 +130,7 @@ set(INFRA_SOURCES
 )
 add_library(infra_lib OBJECT ${INFRA_SOURCES})
 if(BARE_METAL)
+    target_sources(infra_lib PRIVATE ${THIS_DIR}/src/syscalls.c)
     target_compile_definitions(infra_lib PRIVATE BARE_METAL)
 else()
     target_sources(infra_lib PRIVATE

@@ -13,16 +13,19 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "arch_ops.h"
 #include "fifo.h"
 
 // Stubs to override the warnings from libc_nano and libnosys
 
+__attribute__((weak)) 
 int _close(int file)
 {
     (void)file;
     return -1;
 }
 
+__attribute__((weak)) 
 int _fstat(int file, struct stat *st)
 {
     (void)file;
@@ -33,6 +36,7 @@ int _fstat(int file, struct stat *st)
 /**
  * @brief Terminal check syscall.
  */
+__attribute__((weak)) 
 int _isatty(int file)
 {
     if (file == STDIN_FILENO || file == STDOUT_FILENO || file == STDERR_FILENO)
@@ -40,6 +44,7 @@ int _isatty(int file)
     return 0;
 }
 
+__attribute__((weak)) 
 int _lseek(int file, int ptr, int dir)
 {
     (void)file;
@@ -51,6 +56,7 @@ int _lseek(int file, int ptr, int dir)
 /**
  * @brief Low-level write syscall for all standard output.
  */
+__attribute__((weak)) 
 int _write(int file, char *ptr, int len)
 {
     if (file == STDOUT_FILENO || file == STDERR_FILENO) {
@@ -66,6 +72,7 @@ int _write(int file, char *ptr, int len)
  * @brief Low-level read syscall.
  * Redirects standard input STDIN_FILENO (0) to UART FIFO.
  */
+__attribute__((weak)) 
 int _read(int file, char *ptr, int len)
 {
     if (file != STDIN_FILENO)
@@ -86,4 +93,53 @@ int _read(int file, char *ptr, int len)
     }
 
     return bytes_read;
+}
+
+/**
+ * @brief Low-level exit syscall.
+ */
+__attribute__((weak)) __attribute__((noreturn)) 
+void _exit(int status) {
+    (void)status;
+    while (true) {
+        HALT_CPU();
+    }
+}
+
+/**
+ * @brief Stub for atexit.
+ */
+__attribute__((weak))
+int atexit(void (*function)(void)) {
+    (void)function;
+    return 0; 
+}
+
+__attribute__((weak))
+void *_sbrk(ptrdiff_t incr)
+{
+    extern char _end;
+    static char *heap_ptr;
+    char *prev_heap_ptr;
+
+    if (heap_ptr == 0)
+        heap_ptr = &_end;
+    prev_heap_ptr = heap_ptr;
+    heap_ptr += incr;
+    return (void *)prev_heap_ptr;
+}
+
+__attribute__((weak)) 
+int _getpid(void)
+{
+    return 1;
+}
+
+__attribute__((weak))
+int _kill(int pid, int sig)
+{
+    (void)pid;
+    (void)sig;
+    errno = EINVAL;
+    return -1;
 }

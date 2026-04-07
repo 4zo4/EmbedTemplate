@@ -2,8 +2,17 @@ cmake_minimum_required(VERSION 3.25)
 project(EmbedTemplate)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Generic")
-    message(STATUS "Target: Embedded ARM")
-    add_compile_definitions(ARCH_ARM)
+    if(CMAKE_SYSTEM_PROCESSOR STREQUAL "arm")
+        message(STATUS "Target: Embedded ARM")
+        set(TARGET_ARCH "arm")
+        add_compile_definitions(ARCH_ARM)
+    elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "riscv")
+        message(STATUS "Target: Embedded RISC-V")
+        set(TARGET_ARCH "riscv")
+        add_compile_definitions(ARCH_RISCV)
+    else()
+        message(FATAL_ERROR "Unsupported architecture: ${CMAKE_SYSTEM_PROCESSOR}")
+    endif()
     set(BARE_METAL TRUE)
 else()
     message(STATUS "Target: Host x86")
@@ -24,13 +33,6 @@ set(RDL_GEN_DIR "${CMAKE_SOURCE_DIR}/src/drivers/include/regs")
 set(PEAKRDL "${CMAKE_SOURCE_DIR}/tools/peakrdl")
 
 # --- Subdirectories ---
-add_subdirectory(third_party) 
-add_subdirectory(common)
-add_subdirectory(src/drivers)
-
-if(TEST)
-    add_subdirectory(src/testhub)
-endif()
 
 if(BARE_METAL)
     set(PLATFORM_DIR "${CMAKE_SOURCE_DIR}/port/${TARGET_ARCH}/${TARGET_CHIP}")
@@ -42,4 +44,12 @@ if(BARE_METAL)
     endif()
 endif()
 
+add_subdirectory(third_party) 
+add_subdirectory(src/drivers)
+
+if(TEST)
+    add_subdirectory(src/testhub)
+endif()
+
+add_subdirectory(common) # require FREERTOS_PORT variable defined in port/<arch>/<chip>/CMakeLists.txt
 add_subdirectory(port)
