@@ -19,4 +19,4 @@ target_include_directories(soc_drivers PRIVATE
     ${LOG_INC_DIRS}
     ${REGS_INC_DIR}
 )
-target_compile_options(soc_drivers PRIVATE -Wall -Wextra -g)
+target_compile_options(soc_drivers PRIVATE -Wall -Wextra -O3)

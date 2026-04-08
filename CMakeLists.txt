@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 project(EmbedTemplate)
+project(EmbedTemplate C ASM)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Generic")
     if(CMAKE_SYSTEM_PROCESSOR STREQUAL "arm")

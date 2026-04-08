@@ -44,7 +44,7 @@ if(RTOS)
     target_compile_definitions(soc_tests PUBLIC ENABLE_RTOS)
 endif()
 
-target_compile_options(soc_tests PRIVATE -Wall -Wextra -g)
+target_compile_options(soc_tests PRIVATE -Wall -Wextra -O3)
 
 set(TEST_SYS_SOURCES
     sys_test_registry.c # system test registry
@@ -63,7 +63,7 @@ set(TEST_SYS_INC_DIRS
 )
 
 add_library(sys_tests STATIC ${TEST_SYS_SOURCES})
-target_compile_options(sys_tests PRIVATE -Wall -Wextra -g)
+target_compile_options(sys_tests PRIVATE -Wall -Wextra -O3)
 target_include_directories(sys_tests PRIVATE
     ${COMMON_INC_DIRS}
     ${TEST_SYS_INC_DIRS}

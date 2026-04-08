@@ -26,7 +26,6 @@ endif()
 add_executable(runner ${STARTUP_SOURCES})
 
 if(BARE_METAL)
-    target_link_options(runner PRIVATE "--specs=nano.specs")
     target_compile_definitions(runner PRIVATE BARE_METAL)
     if(RTOS)
         # The path to the FreeRTOS port sources is defined by the FREERTOS_PORT variable in port/<arch>/<chip>/CMakeLists.txt
@@ -75,5 +74,5 @@ target_include_directories(runner PRIVATE
     ${DRIVERS_INC_DIR}/regs
 )
 
-target_compile_options(runner PRIVATE -fno-builtin-printf -fno-builtin-puts -Wall -Wextra -g)
+target_compile_options(runner PRIVATE -fno-builtin-printf -fno-builtin-puts -Wall -Wextra -O3)
 target_link_options(runner PRIVATE "-Wl,-Map=runner.map")

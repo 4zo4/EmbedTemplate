@@ -1,29 +1,32 @@
 #ifndef FREERTOS_CONFIG_H
 #define FREERTOS_CONFIG_H
 
-#if defined(ARCH_ARM)
+#ifdef ARCH_RISCV
+/* GD32VF103 Specifics */
+#define configMTIME_BASE_ADDRESS (0xD1000000UL)
+#define configMTIMECMP_BASE_ADDRESS (0xD1000008UL)
+#define configCPU_CLOCK_HZ ((unsigned long)108000000) // 108MHz
+#define configMAX_PRIORITIES (7)
+#elif defined(ARCH_ARM)
 /* STM32F4 Specifics */
-#define configCPU_CLOCK_HZ ((unsigned long)168000000) // 168MHz for F407
+#define configCPU_CLOCK_HZ ((unsigned long)168000000) // 168MHz
 #define configMAX_PRIORITIES (5)
-#define configUSE_IDLE_HOOK 1
-/* Cortex-M specific interrupt priorities */
 #define configPRIO_BITS 4
 #define configLIBRARY_LOWEST_INTERRUPT_PRIORITY 0xf
 #define vPortSVCHandler SVC_Handler
 #define xPortPendSVHandler PendSV_Handler
 #define xPortSysTickHandler SysTick_Handler
-/* Cortex-M specific priority macros */
 #define configKERNEL_INTERRUPT_PRIORITY (configLIBRARY_LOWEST_INTERRUPT_PRIORITY << (8 - configPRIO_BITS))
 #define configMAX_SYSCALL_INTERRUPT_PRIORITY (5 << (8 - configPRIO_BITS))
 #elif defined(ARCH_X86)
-/* POSIX Simulator Specifics */
-#define configCPU_CLOCK_HZ ((unsigned long)1000000) // 1MHz for simulation
+#define configCPU_CLOCK_HZ ((unsigned long)1000000)
 #define configMAX_PRIORITIES (7)
-#define configUSE_IDLE_HOOK 1
-/* The POSIX port uses signals to simulate interrupts */
 #define configKERNEL_INTERRUPT_PRIORITY 1
 #define configMAX_SYSCALL_INTERRUPT_PRIORITY 1
 #endif
+
+/* --- Global Settings --- */
+#define configUSE_IDLE_HOOK (1)
 #define configTICK_RATE_HZ ((TickType_t)1000)
 #define configMINIMAL_STACK_SIZE ((unsigned short)256)
 /* Kernel Settings */

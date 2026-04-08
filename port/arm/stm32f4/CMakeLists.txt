@@ -1,9 +1,15 @@
+set(ARCH_WIDTH 32 PARENT_SCOPE)
 set(CPU_FLAGS "-mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16")
 set(LINKER_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/stm32f4.ld")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${CPU_FLAGS}" PARENT_SCOPE)
 set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} ${CPU_FLAGS}" PARENT_SCOPE)
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${CPU_FLAGS} -T ${LINKER_SCRIPT}" PARENT_SCOPE)
-
+add_link_options(
+    "-Wl,-e,reset_handler"
+    "--specs=nano.specs"
+    "--specs=nosys.specs"
+    "-Wl,--gc-sections"
+)
 set(FREERTOS_PORT "ARM_CM4F" PARENT_SCOPE)
 
 set(TARGET_CHIP_SOURCES

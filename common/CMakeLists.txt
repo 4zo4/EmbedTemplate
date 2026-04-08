@@ -38,10 +38,10 @@ set(MOCK_SOURCES
 )
 
 # --- TF-A C Lib (tfa_libc_lib) ---
-if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-    set(TFA_ARCH_SUBDIR "aarch64")
-else()
+if(ARCH_WIDTH EQUAL 32)
     set(TFA_ARCH_SUBDIR "aarch32")
+else()
+    set(TFA_ARCH_SUBDIR "aarch64")
 endif()
 set(TFA_ARCH_INC "${TFA_LIBC_INC_DIR}/${TFA_ARCH_SUBDIR}")
 # Build the TFA Libc Object Library
@@ -50,7 +50,7 @@ target_include_directories(tfa_libc_lib PRIVATE
     ${TFA_ARCH_INC} # TF-A Arch-Specific Headers
     ${MOCK_LIBC_INC_DIR} # selected libc mocks
     ${TFA_LIBC_INC_DIR} # TF-A Libc Headers
-    ${ARCH_INC_DIR}
+    ${ARCH_INC_DIR} # mock sources need access to arch-specific ops
 )
 if(BARE_METAL)
     target_compile_definitions(tfa_libc_lib PRIVATE BARE_METAL)
@@ -60,11 +60,15 @@ target_compile_options(tfa_libc_lib PRIVATE -ffreestanding -nostdlib -fno-builti
 
 # --- FreeRTOS (freertos_lib) ---
 if(RTOS)
-    if(BARE_METAL)# The path to the FreeRTOS port sources is defined by the FREERTOS_PORT variable in port/<arch>/<chip>/CMakeLists.txt
-        
+    if(BARE_METAL)
+        # The path to the FreeRTOS port sources is defined by the FREERTOS_PORT variable in port/<arch>/<chip>/CMakeLists.txt
         set(FREERTOS_PORT_DIR "${FREERTOS_DIR}/portable/GCC/${FREERTOS_PORT}")
+        set(FREERTOS_PORT_SOURCES "")
         set(FREERTOS_MOCK_SOURCES "")
-        set(FREERTOS_PORT_SOURCES ${FREERTOS_PORT_DIR}/port.c)
+        if(TARGET_ARCH STREQUAL "riscv")
+            list(APPEND FREERTOS_PORT_SOURCES "${FREERTOS_PORT_DIR}/portASM.S")
+        endif()
+        list(APPEND FREERTOS_PORT_SOURCES "${FREERTOS_PORT_DIR}/port.c")
     else()
         set(FREERTOS_PORT_DIR "${FREERTOS_DIR}/portable/ThirdParty/GCC/Posix")
         set(FREERTOS_MOCK_SOURCES ${THIS_DIR}/src/os/freertos/mock_interrupt.c)
@@ -82,6 +86,7 @@ if(RTOS)
         ${FREERTOS_DIR}/include
         ${FREERTOS_PORT_DIR}
         ${FREERTOS_PORT_DIR}/utils
+        ${FREERTOS_CHIP_DIR} # for chip-specific FreeRTOS config and hooks defined in port/<arch>/<chip>/CMakeLists.txt
         ${THIS_DIR}/include # for common terminal codes
         ${THIS_DIR}/include/os/freertos # freertos config
     )
@@ -142,6 +147,10 @@ target_include_directories(infra_lib PRIVATE
     ${THIS_DIR}/include
     ${ARCH_INC_DIR}
     ${LOG_INC_DIRS}
+)
+set_source_files_properties(
+    ${THIS_DIR}/src/diagnostic/logging/log_infra.c
+    PROPERTIES COMPILE_OPTIONS "-Wno-stringop-overflow"
 )
 target_compile_options(infra_lib PRIVATE -ffreestanding -fno-builtin -O3)
 
