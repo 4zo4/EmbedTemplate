@@ -3,8 +3,13 @@
 
 #ifdef ARCH_RISCV
 /* GD32VF103 Specifics */
+#ifndef TARGET_HW_GD32VF103
+#define configMTIME_BASE_ADDRESS (0xD1000000UL + 0xBFF8UL)
+#define configMTIMECMP_BASE_ADDRESS (0xD1000000UL + 0x4000UL)
+#else
 #define configMTIME_BASE_ADDRESS (0xD1000000UL)
 #define configMTIMECMP_BASE_ADDRESS (0xD1000008UL)
+#endif
 #define configCPU_CLOCK_HZ ((unsigned long)108000000) // 108MHz
 #define configMAX_PRIORITIES (7)
 #elif defined(ARCH_ARM)

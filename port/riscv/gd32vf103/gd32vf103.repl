@@ -1,0 +1,29 @@
+cpu: CPU.RiscV32 @ sysbus
+    cpuType: "rv32imac_zicsr"
+    privilegedArchitecture: PrivilegeArchitecture.Priv1_10
+    timeProvider: clint
+    hartId: 0
+
+flash: Memory.MappedMemory @ sysbus 0x08000000
+    size: 0x40000
+
+ram: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x8000
+
+rcu: Memory.MappedMemory @ sysbus 0x40021000
+    size: 0x1000
+
+gpioa: Memory.MappedMemory @ sysbus 0x40010000
+    size: 0x1000
+
+plic: IRQControllers.PlatformLevelInterruptController @ sysbus 0xD2000000
+    numberOfSources: 90
+    numberOfContexts: 1
+    0 -> cpu@11
+
+clint: IRQControllers.CoreLevelInterruptor @ sysbus 0xD1000000
+    [0,1] -> cpu@[3,7]
+    frequency: 108000000
+
+uart0: UART.NS16550 @ sysbus 0x40013800
+    IRQ -> plic@56

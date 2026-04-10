@@ -18,6 +18,10 @@
 #include "test_registry.h"
 #include "utils.h"
 
+// guard macro substitutions for standard i/o functions
+#undef getchar
+#undef putchar
+
 // prototypes without include file
 void clear_msg(void);
 void set_msg(const char *msg);

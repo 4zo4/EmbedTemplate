@@ -9,24 +9,47 @@
  */
 #include <stdint.h>
 
+#include "log.h"
+#include "log_marker.h"
 #include "utils.h"
+
+#ifdef TARGET_HW_GD32VF103
+#define IRQ_HANDLER __attribute__((interrupt))
+#else
+#define IRQ_HANDLER
+#endif
+
+#define LOG_SYS_CRITICAL(...) LOG_ENTITY_CRITICAL(ID_SYS(ENT_TIMER), __VA_ARGS__)
+#define LOG_SYS_ERROR(...) LOG_ENTITY_ERROR(ID_SYS(ENT_TIMER), __VA_ARGS__)
+#define LOG_SYS_WARNING(...) LOG_ENTITY_WARNING(ID_SYS(ENT_TIMER), __VA_ARGS__)
+#define LOG_SYS_INFO(...) LOG_ENTITY_INFO(ID_SYS(ENT_TIMER), __VA_ARGS__)
+#define LOG_SYS_DEBUG(...) LOG_ENTITY_DEBUG(ID_SYS(ENT_TIMER), __VA_ARGS__)
 
 // GD32VF103 Machine Timer Base and Register Definitions
 #define MTIMER_BASE 0xD1000000
+#ifdef TARGET_HW_GD32VF103
 #define MTIME_LO (*(volatile uint32_t *)(MTIMER_BASE + 0x00))
 #define MTIME_HI (*(volatile uint32_t *)(MTIMER_BASE + 0x04))
 #define MTIMECMP_LO (*(volatile uint32_t *)(MTIMER_BASE + 0x08))
 #define MTIMECMP_HI (*(volatile uint32_t *)(MTIMER_BASE + 0x0C))
-
 #define CORE_FREQ 108000000ULL
 #define TICK_DIVISOR 4000                               // Timer clock is 1/4 of Core clock on GD32VF
 #define TICK_INTERVAL (CORE_FREQ / TICK_DIVISOR / 1000) // 1ms tick interval
+#else // Renode
+#define MTIME_LO (*(volatile uint32_t *)(MTIMER_BASE + 0xBFF8))
+#define MTIME_HI (*(volatile uint32_t *)(MTIMER_BASE + 0xBFFC))
+#define MTIMECMP_LO (*(volatile uint32_t *)(MTIMER_BASE + 0x4000))
+#define MTIMECMP_HI (*(volatile uint32_t *)(MTIMER_BASE + 0x4004))
+#define TICK_INTERVAL 1000 
+#endif
 
 static uint64_t boot_ts = 0;
 
 void init_timestamp(void)
 {
     // Machine timer starts at reset; no specific init required for mtime
+    log_set_level(DOMAIN_SYS, ENTITY_TIMER, LOG_LEVEL_INFO);
+    LOG_SYS_INFO("Timestamp initialized");
 }
 
 uint64_t get_timestamp48(void)
@@ -65,7 +88,7 @@ void init_systick(void)
 extern volatile uint8_t  event_notify;
 static volatile uint32_t system_ticks = 0;
 
-void __attribute__((interrupt)) timer_handler(void)
+void IRQ_HANDLER timer_handler(void)
 {
     uint64_t next_tick = (((uint64_t)MTIMECMP_HI) << 32 | MTIMECMP_LO) + TICK_INTERVAL;
     MTIMECMP_LO = (uint32_t)next_tick;
@@ -78,7 +101,8 @@ void __attribute__((interrupt)) timer_handler(void)
      * Alternatively, you can use & 127 for 128ms or & 255 for 256ms, etc. for the desired frequency of the event.
      */
     if ((system_ticks & (1024 - 1)) == 0) {
-        event_notify |= BIT(0);
+        LOG_SYS_DEBUG("SysTick: %lu", (unsigned long)(system_ticks));
+        event_notify |= BIT(0); // Set SysTick event flag
     }
 }
 

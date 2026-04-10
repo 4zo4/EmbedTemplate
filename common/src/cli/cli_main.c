@@ -37,6 +37,10 @@ void cli_log_cmd_init(void);
 void run_cli_tests(EmbeddedCli *cli);
 bool stdin_ready(int timeout_ms);
 
+// guard macro substitutions for standard i/o functions
+#undef getchar
+#undef putchar
+
 // Logging Macros for CLI specific System-Level Messages
 #define LOG_CLI_CRITICAL(...) LOG_ENTITY_CRITICAL(ID_SYS(ENT_CLI), __VA_ARGS__)
 #define LOG_CLI_ERROR(...) LOG_ENTITY_ERROR(ID_SYS(ENT_CLI), __VA_ARGS__)

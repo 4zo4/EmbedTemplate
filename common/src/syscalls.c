@@ -100,6 +100,11 @@ __attribute__((weak)) __attribute__((noreturn)) void _exit(int status)
     }
 }
 
+void exit(int status) {
+    (void)status;
+    _exit(status);
+}
+
 /**
  * @brief Stub for atexit.
  */
@@ -145,3 +150,11 @@ __attribute__((weak)) void *malloc(size_t size)
     (void)size;
     return (void *)0;
 }
+
+// Dummy FILE structures for stdin, stdout, and stderr (works for newlib and picolibc)
+#undef stdin
+#undef stdout
+#undef stderr
+FILE *const stdin = (void*)0;
+FILE *const stdout = (void*)0;
+FILE *const stderr = (void*)0;

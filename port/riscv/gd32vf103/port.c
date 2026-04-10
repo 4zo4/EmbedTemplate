@@ -2,23 +2,40 @@
  * @file port.c
  * @brief Port-specific implementations for GD32VF103.
  * This file contains the implementations of the hardware-specific functions for the GD32VF103 microcontroller,
- * including UART initialization and interrupt handlers. It also supports Pico SDK's hooks for UART putc and getc.
+ * including UART initialization and interrupt handlers.
  */
 #include <stdint.h>
 #include <stdio.h>
 
 #include "fifo.h"
+#include "log.h"
+#include "log_marker.h"
 #include "utils.h"
 #ifdef ENABLE_RTOS
 #include "FreeRTOS.h"
 #include "semphr.h"
 #endif
 
+// guard macro substitutions for standard i/o functions
 #undef getchar
 #undef putchar
 
+#ifdef TARGET_HW_GD32VF103
+#define IRQ_HANDLER __attribute__((interrupt))
+#else
+#define IRQ_HANDLER
+#endif
+
+#define LOG_SYS_CRITICAL(...) LOG_ENTITY_CRITICAL(ID_SYS(ENT_UART), __VA_ARGS__)
+#define LOG_SYS_ERROR(...) LOG_ENTITY_ERROR(ID_SYS(ENT_UART), __VA_ARGS__)
+#define LOG_SYS_WARNING(...) LOG_ENTITY_WARNING(ID_SYS(ENT_UART), __VA_ARGS__)
+#define LOG_SYS_INFO(...) LOG_ENTITY_INFO(ID_SYS(ENT_UART), __VA_ARGS__)
+#define LOG_SYS_DEBUG(...) LOG_ENTITY_DEBUG(ID_SYS(ENT_UART), __VA_ARGS__)
+
 // GD32VF103 UART Base and Register Definitions
 #define UART0_BASE 0x40013800
+
+#ifdef TARGET_HW_GD32VF103
 #define UART_STAT (*(volatile uint32_t *)(UART0_BASE + 0x00))
 #define UART_DATA (*(volatile uint32_t *)(UART0_BASE + 0x04))
 #define UART_BAUD (*(volatile uint32_t *)(UART0_BASE + 0x08))
@@ -27,6 +44,14 @@
 #define UART_RBNE BIT(5) // Read Data Buffer Not Empty
 #define UART_TBE BIT(7)  // Transmit Buffer Empty
 
+#else // Renode NS16550
+#define UART_DATA (*(volatile uint8_t *)(UART0_BASE + 0x00))
+#define UART_IER (*(volatile uint8_t *)(UART0_BASE + 0x01))
+#define UART_FCR (*(volatile uint8_t *)(UART0_BASE + 0x02))
+#define UART_STAT (*(volatile uint8_t *)(UART0_BASE + 0x05))
+#endif
+
+#ifdef TARGET_HW_GD32VF103
 #define RCU_BASE 0x40021000
 #define RCU_APB2EN (*(volatile uint32_t *)(RCU_BASE + 0x18))
 #define ECLIC_BASE 0xD2000000
@@ -34,6 +59,13 @@
 #define ECLIC_INT_IP(id) (*(volatile uint8_t *)(ECLIC_BASE + 0x1000 + (id) * 4))
 #define ECLIC_INT_ATTR(id) (*(volatile uint8_t *)(ECLIC_BASE + 0x1002 + (id) * 4))
 #define GPIOA_CTL1 (*(volatile uint32_t *)0x40010804)
+#else // Renode
+#define PLIC_BASE 0xD2000000
+#define PLIC_PRIORITY(id) (*(volatile uint32_t *)(PLIC_BASE + (id) * 4))
+#define PLIC_ENABLE(id) (*(volatile uint32_t *)(PLIC_BASE + 0x2000 + ((id) / 32) * 4))
+#define PLIC_THRESHOLD (*(volatile uint32_t *)(PLIC_BASE + 0x200000))
+#define PLIC_CLAIM (*(volatile uint32_t *)(PLIC_BASE + 0x200004))
+#endif
 
 #ifndef ENABLE_RTOS
 volatile uint8_t event_notify = 0;
@@ -43,6 +75,7 @@ static bool buffered_mode = false;
 
 void init_uart(void)
 {
+#ifdef TARGET_HW_GD32VF103
     // Enable Clocks (GPIOA + UART0)
     RCU_APB2EN |= BIT(2) | BIT(14);
 
@@ -66,15 +99,30 @@ void init_uart(void)
     // Configure ECLIC for UART0 (ID 56)
     ECLIC_INT_ATTR(56) = 0x3; // Trigger: Level, Type: Vectored
     ECLIC_INT_IE(56) = 1;     // Enable Interrupt
-
+#else // Renode NS16550
+    UART_IER = 0x01; // Interrupt Enable for Renode NS16550
+    UART_FCR = 0x07; // Enable FIFO, clear RX/TX buffers for Renode NS16550
+    PLIC_PRIORITY(56) = 1;
+    PLIC_ENABLE(56) |= (1 << (56 % 32)); // Enable interrupt source
+    PLIC_THRESHOLD = 0;
+#endif
     // Global Interrupt Enable (MIE bit in mstatus)
     __asm volatile("csrs mstatus, 8");
+#ifndef TARGET_HW_GD32VF103
+    // Machine Timer External Interrupts (MEIE) for PLIC
+    const uintptr_t mie_bit = 0x800;
+    __asm volatile("csrs mie, %0" : : "r"(mie_bit));
+#endif
+    log_set_level(DOMAIN_SYS, ENTITY_UART, LOG_LEVEL_INFO);
+    LOG_SYS_INFO("UART initialized with baud rate 115200");
 }
 
 int putchar(int c)
 {
+#ifdef TARGET_HW_GD32VF103
     while (!(UART_STAT & UART_TBE))
         ;
+#endif
     UART_DATA = (uint8_t)c;
     return c;
 }
@@ -95,7 +143,7 @@ static inline bool xPortIsInsideInterrupt(void)
     __asm volatile("csrr %0, mcause" : "=r"(cause));
     return (cause >> 31) != 0;
 }
-#endif
+#endif // ENABLE_RTOS
 
 bool stdin_ready(int timeout_ms)
 {
@@ -109,7 +157,7 @@ bool stdin_ready(int timeout_ms)
         }
         return false;
     }
-#else
+#else // Non-RTOS
     (void)timeout_ms;
 #endif
     return false;
@@ -129,15 +177,19 @@ void signal_data_ready(void)
     } else {
         xTaskNotifyGive(xCliHandle);
     }
-#else
+#else // Non-RTOS: Set Data Ready Flag
     event_notify |= BIT(1);
 #endif
 }
 
 void uart_flush(void)
 {
+#ifdef TARGET_HW_GD32VF103
     while (!(UART_STAT & UART_TBE))
         ;
+#else // Renode
+    (void)UART_STAT; // Dummy read
+#endif
 }
 
 int fflush(FILE *stream)
@@ -157,11 +209,15 @@ void uart_set_buffered_mode(bool enabled)
     buffered_mode = enabled;
 }
 
-void __attribute__((interrupt)) UART0_irq_handler(void)
+void IRQ_HANDLER UART0_irq_handler(void)
 {
+#ifndef TARGET_HW_GD32VF103
+    uint32_t irq_id = PLIC_CLAIM;
+    if (irq_id == 56) {
+#else
     if (UART_STAT & UART_RBNE) {
+#endif
         char c = (char)UART_DATA;
-
         if (echo_enabled)
             putchar(c);
 
@@ -169,6 +225,10 @@ void __attribute__((interrupt)) UART0_irq_handler(void)
 
         if (!buffered_mode || (c == '\n' || c == '\r'))
             signal_data_ready();
+
+#ifndef TARGET_HW_GD32VF103
+        PLIC_CLAIM = irq_id;
+#endif
     }
 }
 
@@ -181,8 +241,8 @@ void __attribute__((interrupt)) UART0_irq_handler(void)
 
 void init_watchdog(void)
 {
-#if 0
-    /* 0x5555 unlocks registers, 0xCCCC starts watchdog, 0xAAAA reloads */
+#if 0 // Disabled
+    // 0x5555 unlocks registers, 0xCCCC starts watchdog, 0xAAAA reloads
     FWDGT_CTL = 0x5555; // Unlock
     FWDGT_PSC = 0x03;   // Prescaler /32 (~40kHz LSI / 32 = 1.25kHz)
     FWDGT_RLD = 1250;   // ~1 second timeout
@@ -195,26 +255,3 @@ void watchdog_feed(void)
 {
     FWDGT_CTL = 0xAAAA;
 }
-
-#ifdef TARGET_LIB_PICO
-
-static int uart_putc(char c, FILE *file)
-{
-    (void)file;
-    putchar(c);
-    return 0;
-}
-
-static int uart_getc(FILE *file)
-{
-    (void)file;
-    return getchar();
-}
-
-static FILE __stdio_stream = FDEV_SETUP_STREAM(uart_putc, uart_getc, NULL, _FDEV_SETUP_RW);
-
-FILE *const stdin = &__stdio_stream;
-FILE *const stdout = &__stdio_stream;
-FILE *const stderr = &__stdio_stream;
-
-#endif

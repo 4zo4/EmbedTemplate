@@ -1,0 +1,21 @@
+using sysbus
+
+mach create "gd32vf103"
+machine LoadPlatformDescription @port/riscv/gd32vf103/gd32vf103.repl
+
+# Start GDB Server
+# machine StartGdbServer 3333
+
+# Setup Terminal
+emulation CreateServerSocketTerminal 2222 "terminal"
+connector Connect sysbus.uart0 terminal
+sysbus.uart0 BaudRate 115200
+
+# Load the code
+macro reset
+"""
+    sysbus LoadELF @build_riscv/port/runner.elf
+"""
+runMacro $reset
+
+start

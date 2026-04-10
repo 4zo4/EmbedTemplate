@@ -56,6 +56,7 @@ target_link_libraries(runner PRIVATE
     ${TESTS_LIBS}
     embedded_cli_lib
     tfa_libc_lib   # TF-A libc
+    ${EXTRA_LIBS}
 )
 
 target_include_directories(runner PRIVATE
