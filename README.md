@@ -21,7 +21,15 @@ A modular C/C++ SDK and project template for SoC FW development and HW testing. 
 ### 1. Prerequisites
 
  - **Build Tools**: `cmake`, `gcc` (C23)
-
+ - **ARM Toolchain**:
+```text
+   sudo apt install gcc-arm-none-eabi binutils-arm-none-eabi gdb-multiarch
+```
+ - **RISC-V Toolchain**:
+```text
+   sudo apt install gcc-riscv64-unknown-elf
+   sudo apt install picolibc-riscv64-unknown-elf
+```
 #### 1.1. Optional for C Header Generator
 
  - **Python**: `python3`
@@ -37,6 +45,17 @@ A modular C/C++ SDK and project template for SoC FW development and HW testing. 
     python3 -m pip install peakrdl-cheader
  ~~~
 
+#### 1.2. Optional Renode HW Simulator
+To install the `Renode HW Simulator`, download the appropriate package for your host from `https://builds.renode.io/`. For Ubuntu/Debian, you can download and install the latest stable release using:
+```text
+   wget https://builds.renode.io/renode_1.16.1_amd64.deb
+   sudo apt install -y mono-complete libgtk2.0-0 libgtk-3-0
+   sudo apt install ./renode_1.16.1_amd64.deb
+```
+#### 1.2.1 Optional Networking Utilities
+```text
+   sudo apt install socat
+```
 ### 2. Initialization
 
 If you just cloned this repository, initialize the submodules:
@@ -52,22 +71,45 @@ and for code development, install the pre-commit hook:
  ~~~
 
 ### 3. Build
-
  ~~~bash
-    # Build with Ninja
+    # Build with Ninja for Host x86
     cmake -G Ninja -S . -B build
     cmake --build build
 
     # Build without tests and RTOS
     cmake -B build -DRTOS=OFF -DTEST=OFF && cmake --build build
  ~~~
-
+```text
+   # Build with Ninja for ARM STM32F4
+   cmake -G Ninja -S . -B build_arm -DCMAKE_TOOLCHAIN_FILE=cmake/arm-none-eabi.cmake \
+   -DTARGET_CHIP=stm32f4
+   cmake --build build_arm
+```
+```text 
+   # Build with Ninja for RISC-V GD32VF103
+   cmake -G Ninja -S . -B build_riscv -DCMAKE_TOOLCHAIN_FILE=cmake/riscv-none-elf.cmake \
+   -DTARGET_CHIP=gd32vf103
+   cmake --build build_riscv
+```
+**Note:** Embedded targets can be built without tests and RTOS too.
 ### 4. Run
 
+ - **Target: Host x86**:
  ~~~bash
     ./build/port/runner
  ~~~
-
+ - **Target: Embedded ARM (STM32F4)**:
+```text
+   renode port/arm/stm32f4/run.resc
+```
+ - **Target: Embedded RISC-V (GD32VF103)**:
+```text
+   renode port/riscv/gd32vf103/run.resc
+```
+If you are using the Renode HW Simulator, open a separate terminal and run the following command to access the serial console:
+```text
+   socat -,rawer tcp:localhost:2222
+```
 ## Modular SDK Framework
 
 ### Bare-metal C Lib
@@ -81,7 +123,7 @@ and for code development, install the pre-commit hook:
 - **Zero-Copy Circular History**: Implements a ring buffer for command history, utilizing backward traversal and sequential duplicate suppression to eliminate `memmove` overhead.
 - **Static Allocation**: Zero-heap design ensuring reliability for bare-metal or RTOS environments.
 
-[[CLI Guide]](./common/src/cli/README.md)
+[**CLI Guide**](./common/src/cli/README.md)
 
 ### Diagnostic Logger
 - **In-Memory & Serial Logging**: Structured logging for real-time firmware diagnostics and post-mortem analysis. The logger implementation is lock-free, multi-writer, and interrupt-safe.
