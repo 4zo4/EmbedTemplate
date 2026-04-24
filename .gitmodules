@@ -8,3 +8,9 @@
 	path = tools/peakrdl
 	url = https://github.com/4zo4/PeakRDL-cheader
 	branch = feature/custom-templates
+[submodule "tools/sim/renode-dpi-examples"]
+	path = tools/sim/renode-dpi-examples
+	url = https://github.com/4zo4/renode-dpi-examples
+[submodule "tools/sim/renode"]
+	path = tools/sim/renode
+	url = https://github.com/4zo4/renode
