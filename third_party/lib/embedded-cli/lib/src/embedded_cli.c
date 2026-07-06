@@ -86,6 +86,8 @@ struct FifoBuf {
      * Size of buffer
      */
     uint16_t size;
+
+    uint16_t pad; /* alignment padding */
 };
 
 struct CliHistory {
@@ -130,14 +132,7 @@ struct CliHistory {
     uint16_t head;
 };
 
-
 struct EmbeddedCliImpl {
-    /**
-     * Invitation string. Is printed at the beginning of each line with user
-     * input
-     */
-    const char *invitation;
-
     CliHistory history;
 
     /**
@@ -145,6 +140,14 @@ struct EmbeddedCliImpl {
      * Chars are stored in FIFO mode.
      */
     FifoBuf rxBuffer;
+
+    CliCommandBinding *bindings;
+
+    /**
+     * Invitation string. Is printed at the beginning of each line with user
+     * input
+     */
+    const char *invitation;
 
     /**
      * Buffer for current command
@@ -161,8 +164,6 @@ struct EmbeddedCliImpl {
      */
     uint16_t cmdMaxSize;
 
-    CliCommandBinding *bindings;
-
     uint16_t bindingsCount;
 
     uint16_t maxBindingsCount;
@@ -174,23 +175,23 @@ struct EmbeddedCliImpl {
     uint16_t inputLineLength;
 
     /**
-     * Stores last character that was processed.
-     */
-    char lastChar;
-
-    /**
      * Flags are defined as CLI_FLAG_*
      */
     uint16_t flags;
 
     /**
-     * Cursor position for current command from right to left 
+     * Cursor position for current command from right to left
      * 0 = end of command
      */
     uint16_t cursorPos;
+
+    /**
+     * Stores last character that was processed.
+     */
+    char lastChar;
 };
 
-static EmbeddedCliConfig defaultConfig;
+static alignas(8) EmbeddedCliConfig defaultConfig;
 
 /**
  * Number of commands that cli adds. Commands:
@@ -200,8 +201,8 @@ static EmbeddedCliConfig defaultConfig;
 
 static const char *lineBreak = "\r\n";
 
-/* References for VT100 escape sequences: 
- * https://learn.microsoft.com/en-us/windows/console/console-virtual-terminal-sequences 
+/* References for VT100 escape sequences:
+ * https://learn.microsoft.com/en-us/windows/console/console-virtual-terminal-sequences
  * https://ecma-international.org/publications-and-standards/standards/ecma-48/
  */
 
@@ -429,7 +430,7 @@ typedef struct {
 
 #define COMPLETION_MAP_SIZE  POW2(2 * MAX_ARGS_COMPLETIONS)
 #define COMPLETION_MAP_MASK  (COMPLETION_MAP_SIZE - 1)
-#define COMPLETION_ARRAY_SIZE BITMAP_ARRAY_SIZE(COMPLETION_MAP_SIZE) 
+#define COMPLETION_ARRAY_SIZE BITMAP_ARRAY_SIZE(COMPLETION_MAP_SIZE)
 
 #if MAX_ARGS_COMPLETIONS <= 255
 static uint8_t  completionMap[COMPLETION_MAP_SIZE];
@@ -482,7 +483,7 @@ EmbeddedCliConfig *embeddedCliDefaultConfig(void) {
 uint16_t embeddedCliRequiredSize(EmbeddedCliConfig *config) {
     uint16_t bindingsCount = (uint16_t) (config->maxBindingsCount + CLI_INTERNAL_BINDING_COUNT);
 
-    size_t totalBytes = 
+    size_t totalBytes =
         ALIGN_UP(sizeof(EmbeddedCli), 8) +
         ALIGN_UP(sizeof(EmbeddedCliImpl), 8) +
         ALIGN_UP(config->rxBufferSize, 8) +
@@ -840,15 +841,15 @@ static void onCharInput(EmbeddedCli *cli, char c) {
         impl->lastChar = '\0';
 
         if (pos == 0 || impl->cmdBuffer[pos-1] == ' ') {
-            embeddedCliRefresh(cli); 
+            embeddedCliRefresh(cli);
         } else {
-            cli->writeChar(cli, c); 
+            cli->writeChar(cli, c);
         }
     } else {
-        memmove(&impl->cmdBuffer[pos + 1], 
-                &impl->cmdBuffer[pos], 
+        memmove(&impl->cmdBuffer[pos + 1],
+                &impl->cmdBuffer[pos],
                 (size_t)(impl->inputLineLength - pos));
-        
+
         impl->cmdBuffer[pos] = c;
         impl->cmdSize++;
 
@@ -881,8 +882,8 @@ static void onControlInput(EmbeddedCli *cli, char c) {
         writeToOutput(cli, impl->invitation);
     } else if ((c == '\b' || c == 0x7F) && (impl->cursorPos > 0)) {
         if (impl->cursorPos < impl->inputLineLength) {
-                memmove(&impl->cmdBuffer[impl->cursorPos - 1], 
-                    &impl->cmdBuffer[impl->cursorPos], 
+                memmove(&impl->cmdBuffer[impl->cursorPos - 1],
+                    &impl->cmdBuffer[impl->cursorPos],
                     (size_t)(impl->inputLineLength - impl->cursorPos));
         }
 
@@ -1088,13 +1089,13 @@ static inline const char *getNameFromContext(EmbeddedCliContext *ctx, int i) {
 
 /**
  * @brief Performs prioritized autocompletion search for the current prefix.
- * 
+ *
  * Implements a hierarchical search to find up to 8 command matches:
  * 1. Primary Context: Scans the dynamic 'EmbeddedCliContext' (e.g., current test names).
- * 2. Application Context: Scans the 'App Context' index list, applying a bitmask (stride) 
+ * 2. Application Context: Scans the 'App Context' index list, applying a bitmask (stride)
  *    to filter out commands that are disabled in the current menu state.
  * 3. Global/Wide Context: If no matches in App Context, scans 'wideBindingsIdx' (e.g., help, quit).
- * 
+ *
  * @param cli      Pointer to the CLI instance.
  * @param matches  Array to be populated with pointers to matching command strings.
  * @param prefix   The current partial string typed by the user.
@@ -1122,12 +1123,12 @@ static int getAutocompletedCommand(EmbeddedCli *cli, const char **matches, const
                 count++;
             } else {
                 return 8;
-            }            
+            }
         }
     }
 
     if (count > 0)
-        return count; 
+        return count;
 
     ctx = embeddedCliGetAppContext();
     const uint8_t *bindingIdx;
@@ -1179,17 +1180,17 @@ static size_t getLongestCommonPrefix(const char **matches, int count) {
 
 /**
  * @brief Main handler for Tab-completion requests.
- * 
+ *
  * Analyzes the current command buffer to determine the completion context:
- * 1. Command Completion: If no spaces are present, it performs a Tiered search 
- *    for primary commands, applying Longest Common Prefix (LCP) for partial 
+ * 1. Command Completion: If no spaces are present, it performs a Tiered search
+ *    for primary commands, applying Longest Common Prefix (LCP) for partial
  *    matches or full completion for unique matches.
- * 2. Argument Completion: If spaces are present, it extracts the primary command 
- *    name and delegates completion logic to the specific 'onArgsCompletion' 
+ * 2. Argument Completion: If spaces are present, it extracts the primary command
+ *    name and delegates completion logic to the specific 'onArgsCompletion'
  *    callback registered in the completion table.
  * 3. Contextual Help: Detects a trailing '?' to trigger a help-specific request,
  *    truncating the buffer before passing the request to the argument handler.
- * 
+ *
  * @param cli Pointer to the CLI instance.
  */
 static void onAutocompleteRequest(EmbeddedCli *cli) {
@@ -1244,7 +1245,7 @@ static void onAutocompleteRequest(EmbeddedCli *cli) {
 
     // Check is Help Request '?'
     bool isHelpRequest = (impl->cmdSize > 0 && impl->cmdBuffer[impl->cmdSize - 1] == '?');
-    
+
     if (isHelpRequest) {
         // Truncate the '?' from the buffer so the completion logic doesn't see it
         impl->cmdSize--;
@@ -1433,7 +1434,7 @@ const char* embeddedCliGetInputString(EmbeddedCli *cli, uint16_t *input_size) {
 void embeddedCliCompletion(EmbeddedCli *cli, const char *name) {
     PREPARE_IMPL(cli);
     size_t nameLen = strlen(name);
-    
+
     // Find the fragment start (backwards from cursor)
     uint16_t tokenStart = impl->cursorPos;
     while (tokenStart > 0 && impl->cmdBuffer[tokenStart - 1] != ' ') {
@@ -1441,22 +1442,22 @@ void embeddedCliCompletion(EmbeddedCli *cli, const char *name) {
     }
 
     // Capacity check (+2 for space and null)
-    if ((size_t)tokenStart + nameLen + 2 >= (size_t)impl->cmdMaxSize) 
+    if ((size_t)tokenStart + nameLen + 2 >= (size_t)impl->cmdMaxSize)
         return;
 
     // Overwrite the fragment with the full name
     memcpy(&impl->cmdBuffer[tokenStart], name, nameLen);
-    
+
     // Update cmdSize and add trailing space
     impl->cmdSize = (uint16_t)(tokenStart + nameLen);
-    impl->cmdBuffer[impl->cmdSize++] = ' '; 
+    impl->cmdBuffer[impl->cmdSize++] = ' ';
     impl->cmdBuffer[impl->cmdSize] = '\0';
 }
 
 void embeddedCliRefresh(EmbeddedCli *cli) {
     PREPARE_IMPL(cli);
 
-    const char *clearLine = "\r\x1B[2K"; 
+    const char *clearLine = "\r\x1B[2K";
     while (*clearLine)
         cli->writeChar(cli, *clearLine++);
 
@@ -1467,7 +1468,7 @@ void embeddedCliRefresh(EmbeddedCli *cli) {
     for (uint16_t i = 0; i < impl->cmdSize; ++i) {
         cli->writeChar(cli, impl->cmdBuffer[i]);
     }
-    
+
     // Sync all internal state
     impl->cursorPos = impl->cmdSize;
     impl->inputLineLength = impl->cmdSize;
@@ -1480,19 +1481,19 @@ void embeddedCliRefresh(EmbeddedCli *cli) {
 
 /**
  * @brief Generates a 32-bit hash using the djb2 algorithm.
- * 
- * This is a high-performance string hashing function (Dan Bernstein's algorithm) 
- * optimized for short identifiers like CLI command names. It uses the initial 
- * magic constant 5381 and a multiplier of 33 (implemented via 'hash << 5 + hash') 
+ *
+ * This is a high-performance string hashing function (Dan Bernstein's algorithm)
+ * optimized for short identifiers like CLI command names. It uses the initial
+ * magic constant 5381 and a multiplier of 33 (implemented via 'hash << 5 + hash')
  * to ensure an excellent bit distribution with minimal CPU cycles.
- * 
+ *
  * Performance & Safety:
  * - Computational Complexity: O(n) where n is the string length.
- * - Hardware Efficiency: Uses only bit-shifting and addition, avoiding 
+ * - Hardware Efficiency: Uses only bit-shifting and addition, avoiding
  *   expensive multiplication or division instructions.
- * - Sign Safety: Explicitly casts characters to uint8_t to prevent sign 
+ * - Sign Safety: Explicitly casts characters to uint8_t to prevent sign
  *   extension errors with extended ASCII values (>127).
- * 
+ *
  * @param str The null-terminated string to be hashed.
  * @return A 32-bit unsigned integer representing the hash of the string.
  */
@@ -1506,33 +1507,33 @@ static uint32_t cliHash(const char *str) {
 
 /**
  * @brief Performs an O(1) optimized lookup for argument completion handlers.
- * 
- * This function locates the specific completion callback associated with a 
- * given command name using a Shadow Index Map architecture. This allows for 
+ *
+ * This function locates the specific completion callback associated with a
+ * given command name using a Shadow Index Map architecture. This allows for
  * fast lookups while maintaining a dense physical storage table.
  *
  * Logic Differentiation:
- * Like the Binding Table, this system uses a "Shadow Map" (completionMap) to 
+ * Like the Binding Table, this system uses a "Shadow Map" (completionMap) to
  * translate hash-based slots into physical indices. However, collisions are
- * resolved via 32-bit nameHash comparison rather than strcmp(). This provides a 
+ * resolved via 32-bit nameHash comparison rather than strcmp(). This provides a
  * "Lightweight" O(1) path that eliminates the need for string storage.
  *
  * Memory Efficiency:
- * By decoupling the sparse lookup map from the completion table, this 
- * implementation achieves a significant RAM reduction. For an 8-entry 
- * configuration, the system uses a 16-slot Shadow Map (16 bytes) and a 
- * 1-word segmented bitmap (4 bytes) to gatekeep an 8-slot Completion Table (64 bytes). 
- * This results in a total footprint of exactly 84 bytes, providing a 36% 
- * saving over a unified 16-slot hash table (132 bytes) by keeping the 
+ * By decoupling the sparse lookup map from the completion table, this
+ * implementation achieves a significant RAM reduction. For an 8-entry
+ * configuration, the system uses a 16-slot Shadow Map (16 bytes) and a
+ * 1-word segmented bitmap (4 bytes) to gatekeep an 8-slot Completion Table (64 bytes).
+ * This results in a total footprint of exactly 84 bytes, providing a 36%
+ * saving over a unified 16-slot hash table (132 bytes) by keeping the
  * function-pointer storage dense.
  *
  * Scalability & Constraints:
- * The architecture is tiered for efficiency: it uses 8-bit indices for up to 
- * 255 completions (automatically promoting to 16-bit for larger sets) and 
- * a segmented bitmap array (inuseCompletion) that scales to any volume. 
- * The O(1) performance is maintained as the system grows by 
+ * The architecture is tiered for efficiency: it uses 8-bit indices for up to
+ * 255 completions (automatically promoting to 16-bit for larger sets) and
+ * a segmented bitmap array (inuseCompletion) that scales to any volume.
+ * The O(1) performance is maintained as the system grows by
  * scaling the COMPLETION_MAP_SIZE to preserve a 50% load factor.
- * 
+ *
  * @param cmdName The command name (e.g., "show", "config") to look up.
  * @return The index in the completionTable if found; -1 otherwise.
  */
@@ -1552,27 +1553,27 @@ static int findCompletionIndex(const char *cmdName) {
 
 /**
  * @brief Performs an O(1) optimized lookup of a command binding index.
- * 
- * This implementation utilizes a Shadow Index Map (Look-Aside Buffer) to 
- * bypass the standard linear search. It maps a truncated hash of the 
+ *
+ * This implementation utilizes a Shadow Index Map (Look-Aside Buffer) to
+ * bypass the standard linear search. It maps a truncated hash of the
  * command name to its physical index in the bindings array.
- * 
+ *
  * The process follows a "Gatekeeper" pattern:
  * 1. Hash the input string (cmdName) using the djb2 algorithm.
- * 2. Check the Segmented In-Use Bitmap to instantly verify if any command 
+ * 2. Check the Segmented In-Use Bitmap to instantly verify if any command
  *    maps to the calculated hash slot (avoids memory access if missing).
  * 3. Retrieve the candidate index from the bindingMap.
- * 4. Perform a single strcmp() to verify the match. This resolves any 
+ * 4. Perform a single strcmp() to verify the match. This resolves any
  *    potential hash collisions and ensures 100% accuracy.
  * Memory Efficiency:
- * The implementation is RAM-optimized for embedded constraints. By 
- * decoupling the large command bindings from the lookup logic, the shadow map 
- * requires only ~5-9 bits per slot for occupancy (segmented bitmap) and 
- * 8 or 16 bits per slot for the index (tiered mapping). For a 256-slot table, 
- * this results in a footprint of roughly 288 bytes, providing O(1) 
- * performance without the overhead of storing full pointers or redundant 
+ * The implementation is RAM-optimized for embedded constraints. By
+ * decoupling the large command bindings from the lookup logic, the shadow map
+ * requires only ~5-9 bits per slot for occupancy (segmented bitmap) and
+ * 8 or 16 bits per slot for the index (tiered mapping). For a 256-slot table,
+ * this results in a footprint of roughly 288 bytes, providing O(1)
+ * performance without the overhead of storing full pointers or redundant
  * string data in the hash table.
- * 
+ *
  * @param cmdName  The string name of the command to find.
  * @param bindings The library's internal array of command bindings.
  * @return The index of the binding if found; -1 otherwise.
@@ -1607,9 +1608,9 @@ static void registerBindingIndex(const char *cmdName, uint16_t actualIdx) {
     SET_IN_USE(inuseBindings, idx);
 }
 
-bool embeddedCliAddCompletion(const char *name, 
+bool embeddedCliAddCompletion(const char *name,
     void (*onArgsCompletion)(EmbeddedCli *cli, const char *token, uint8_t pos)) {
-    
+
     if (completionsCount >= MAX_ARGS_COMPLETIONS)
         return false;
 
