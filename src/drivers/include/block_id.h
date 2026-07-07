@@ -3,6 +3,7 @@
 // SoC block indices
 typedef enum {
     GPIO = 0,
+    PCI,
     SYSCTRL,
     TIMER,
     UART,

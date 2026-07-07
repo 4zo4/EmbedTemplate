@@ -1,10 +1,11 @@
-
 #include <stdint.h>
 
 #include "log.h"
 #include "log_marker.h"
 #include "test_common.h"
 #include "test_uart.h"
+
+#ifdef ENABLE_UART
 
 int test_uart_init(char *args)
 {
@@ -30,6 +31,7 @@ int test_uart_baud_rate(char *args)
     return 0; // Return 0 on success
 }
 
+const int   UART_num_tests = UART_TEST_NUM;
 test_desc_t UART_tests[] = {
     {"UART_Init",  test_uart_init,         true },
     {"UART_TxRx",  test_uart_send_receive, true },
@@ -38,3 +40,10 @@ test_desc_t UART_tests[] = {
 };
 
 static_assert(sizeof(UART_tests) / sizeof(UART_tests[0]) == UART_TEST_NUM, "UART tests out of range");
+
+#else // !ENABLE_UART
+
+const int   UART_num_tests = 0;
+test_desc_t UART_tests[] = {{0}};
+
+#endif // ENABLE_UART

@@ -7,3 +7,4 @@
 
 #define LOG_TEST_NUM 1
 extern test_desc_t LOG_tests[];
+extern const int   LOG_num_tests;

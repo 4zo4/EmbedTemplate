@@ -8,6 +8,7 @@
 #include <stdio.h>
 
 #include "fifo.h"
+#include "event.h"
 #include "log.h"
 #include "log_marker.h"
 #include "utils.h"
@@ -68,7 +69,7 @@
 #endif
 
 #ifndef ENABLE_RTOS
-volatile uint8_t event_notify = 0;
+volatile EVT_BITMAP event_notify = 0;
 #endif
 static bool echo_enabled = true;
 static bool buffered_mode = false;
@@ -99,7 +100,7 @@ void init_uart(void)
     // Configure ECLIC for UART0 (ID 56)
     ECLIC_INT_ATTR(56) = 0x3; // Trigger: Level, Type: Vectored
     ECLIC_INT_IE(56) = 1;     // Enable Interrupt
-#else // Renode NS16550
+#else                         // Renode NS16550
     UART_IER = 0x01; // Interrupt Enable for Renode NS16550
     UART_FCR = 0x07; // Enable FIFO, clear RX/TX buffers for Renode NS16550
     PLIC_PRIORITY(56) = 1;
@@ -178,7 +179,7 @@ void signal_data_ready(void)
         xTaskNotifyGive(xCliHandle);
     }
 #else // Non-RTOS: Set Data Ready Flag
-    event_notify |= BIT(1);
+    event_notify |= EVT_DATA_READY;
 #endif
 }
 
@@ -255,3 +256,5 @@ void watchdog_feed(void)
 {
     FWDGT_CTL = 0xAAAA;
 }
+
+void (*volatile init_port_globals)(void) = nullptr;

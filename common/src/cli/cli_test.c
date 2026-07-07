@@ -237,11 +237,22 @@ void set_test_commands(EmbeddedCli *cli)
     uint16_t bid;
 
     bid = embeddedCliAddBinding(cli, (CliCommandBinding){"test", BINDING_FLAG_HIDDEN, nullptr, on_test_menu});
-    cli_data.bindings[1] = bid; 
+    cli_data.bindings[1] = bid;
     bid = embeddedCliAddBinding(cli, (CliCommandBinding){"dev", BINDING_FLAG_HIDDEN, nullptr, on_dev_test_menu});
-    cli_data.bindings[2] = bid; 
+    cli_data.bindings[2] = bid;
     bid = embeddedCliAddBinding(cli, (CliCommandBinding){"sys", BINDING_FLAG_HIDDEN, nullptr, on_sys_test_menu});
-    cli_data.bindings[3] = bid; 
+    cli_data.bindings[3] = bid;
+
+    for (int i = 0; i < MAX_BLOCK_INDEX; i++) {
+        dev_test_registry[i].count = *dev_test_registry[i].num_tests;
+        if (dev_test_registry[i].count == 0)
+            dev_test_registry[i].enabled = false;
+    }
+    for (int i = 0; i < MAX_INFRA_INDEX; i++) {
+        sys_test_registry[i].count = *sys_test_registry[i].num_tests;
+        if (sys_test_registry[i].count == 0)
+            sys_test_registry[i].enabled = false;
+    }
 
     set_test_registry_bindings(cli, dev_test_registry, MAX_BLOCK_INDEX);
     set_test_registry_bindings(cli, sys_test_registry, MAX_INFRA_INDEX);

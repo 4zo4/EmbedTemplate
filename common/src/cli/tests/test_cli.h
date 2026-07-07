@@ -7,3 +7,4 @@
 
 #define CLI_TEST_NUM 18
 extern test_desc_t CLI_tests[];
+extern const int   CLI_num_tests;

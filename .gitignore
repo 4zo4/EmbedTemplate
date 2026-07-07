@@ -1,5 +1,14 @@
+# Prerequisites
+*.swp
+
+# Build Directory for Supported Architectures
 build/
+
+# CMake Generated Files and Artifacts
 CMakeCache.txt
 CMakeFiles/
+CMakePresets.json
+*.cmake
+
+# IDE Configurations
 .vscode/
-*.swp

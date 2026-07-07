@@ -1,7 +1,7 @@
 /**
  * @file time.c
- * @brief Timestamp and system tick implementation for STM32F4.
- * This file implements the timestamp and system tick functionality for the STM32F4 microcontroller
+ * @brief Timestamp and system tick implementation for Cortex-M4.
+ * This file implements the timestamp and system tick functionality for the Cortex-M4 microcontroller
  * using the Data Watchpoint and Trace (DWT) unit for high-resolution timing. The timestamp is based on the DWT cycle counter,
  * which provides a 48-bit timestamp with microsecond resolution.
  * The system tick is implemented using the SysTick timer, configured to generate an interrupt every 1 millisecond.
@@ -10,6 +10,7 @@
  */
 #include <stdint.h>
 
+#include "event.h"
 #include "log.h"
 #include "log_marker.h"
 #include "utils.h"
@@ -83,7 +84,6 @@ static void scb_cfg_system_irqs(void)
 #define STK_CTRL_CLKSOURCE BIT(2)
 #define STK_CTRL_COUNTFLAG BIT(16)
 
-extern volatile uint8_t  event_notify;
 static volatile uint32_t system_ticks = 0;
 
 void init_systick(void)
@@ -106,7 +106,8 @@ void SysTick_Handler(void)
      * Alternatively, you can use & 127 for 128ms or & 255 for 256ms, etc. for the desired frequency of the event.
      */
     if ((system_ticks & (1024 - 1)) == 0) {
-        event_notify |= BIT(0);
+        LOG_SYS_DEBUG("SysTick: %lu", (unsigned long)(system_ticks));
+        event_notify |= EVT_SYS_TICK;
     }
 }
 

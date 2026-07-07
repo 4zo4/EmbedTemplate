@@ -1,14 +1,27 @@
-$bin?=@build_arm/port/runner.elf
+
 mach create "stm32f4"
 machine LoadPlatformDescription @platforms/cpus/stm32f4.repl
 machine LoadPlatformDescription @port/arm/stm32f4/dwt.repl
 
+# Performance & Engine Settings
 sysbus SilenceRange <0x40002C00 0x8>
-sysbus.cpu PerformanceInMips 168
-sysbus LoadELF $bin
+sysbus.cpu PerformanceInMips 20
+sysbus.cpu MaximumBlockSize 10
+logLevel 3
+emulation SetGlobalQuantum "0.005"
 
+# Start GDB Server
 #machine StartGdbServer 3333
+# Setup Terminal
 emulation CreateServerSocketTerminal 2222 "terminal"
 connector Connect sysbus.usart1 terminal
 sysbus.usart1 BaudRate 115200
+
+# Load the code via Macro
+macro reset
+"""
+    sysbus LoadELF @build/stm32f4/port/runner.elf
+"""
+runMacro $reset
 start
+

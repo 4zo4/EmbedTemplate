@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include "arch_ops.h"
+#include "event.h"
 #include "gpio_demo_regs.h"
 #include "gpio.h"
 #include "log.h"
@@ -19,6 +20,7 @@
 int      cli_init(void **cli_ctx);
 bool     cli_run(void *cli_ctx);
 void     cli_exit(void *cli_ctx);
+void     init_pci(void);
 void     init_uart(void);
 void     init_systick(void);
 void     init_timestamp(void);
@@ -27,8 +29,8 @@ void     init_watchdog(void);
 
 // -- Globals --
 
-extern volatile bool    keep_running;
-extern volatile uint8_t event_notify;
+extern void (*volatile init_port_globals)(void);
+extern volatile bool keep_running;
 
 // -- End of globals --
 
@@ -52,13 +54,18 @@ int main(void)
     alignas(8) static volatile gpio_ctrl_t gpio; // Local instance of GPIO registers -
                                                  // simulated memory-mapped hardware
 #ifdef BARE_METAL
+    if (init_port_globals)
+        init_port_globals();
     init_timestamp();
     init_systick();
     init_uart();
     init_watchdog();
+#ifdef ENABLE_PCI
+    init_pci();
 #endif
-    get_timestamp48();                           // start time
-    gpio_set_regs(&gpio);                        // Set the base address for the GPIO driver
+#endif
+    get_timestamp48();    // start time
+    gpio_set_regs(&gpio); // Set the base address for the GPIO driver
     // Set log level for gpio
     log_set_level(DOMAIN_DEV, ENTITY_GPIO, LOG_LEVEL_INFO);
 
@@ -92,11 +99,14 @@ int main(void)
         restore_interrupts(primask);
 
         if (event) {
-            if (event & BIT(0)) { // is SysTick event
-                NOP(); // Placeholder for tasks that need to run on SysTick 
+            if (event & EVT_MSI_MASK) { // is PCI MSI event
+                NOP();                  // Placeholder for tasks that need to run on PCI MSI event
             }
-            if (event & BIT(1)) { // is Data Ready event
-                NOP(); // CLI passthrough for data pending and read from UART
+            if (event & EVT_SYS_TICK) { // is SysTick event
+                NOP();                  // Placeholder for tasks that need to run on SysTick
+            }
+            if (event & EVT_DATA_READY) { // is Data Ready event
+                NOP();                    // CLI passthrough for data pending and read from UART
             }
             keep_running = cli_run(cli_ctx);
         }

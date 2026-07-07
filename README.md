@@ -81,15 +81,15 @@ and for code development, install the pre-commit hook:
  ~~~
 ```text
    # Build with Ninja for ARM STM32F4
-   cmake -G Ninja -S . -B build_arm -DCMAKE_TOOLCHAIN_FILE=cmake/arm-none-eabi.cmake \
+   cmake -G Ninja -S . -B build/stm32f4 -DCMAKE_TOOLCHAIN_FILE=cmake/arm-none-eabi.cmake \
    -DTARGET_CHIP=stm32f4
-   cmake --build build_arm
+   cmake --build build/stm32f4
 ```
 ```text 
    # Build with Ninja for RISC-V GD32VF103
-   cmake -G Ninja -S . -B build_riscv -DCMAKE_TOOLCHAIN_FILE=cmake/riscv-none-elf.cmake \
+   cmake -G Ninja -S . -B build/gd32vf103 -DCMAKE_TOOLCHAIN_FILE=cmake/riscv-none-elf.cmake \
    -DTARGET_CHIP=gd32vf103
-   cmake --build build_riscv
+   cmake --build build/gd32vf103
 ```
 **Note:** Embedded targets can be built without tests and RTOS too.
 ### 4. Run

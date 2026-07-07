@@ -36,6 +36,7 @@
 #include "log.h"
 #include "log_marker.h"
 #include "pack.h"
+#include "pci.h"
 #include "utils.h"
 
 // Logging Macros for Simulation specific System-Level Messages
@@ -137,7 +138,9 @@ typedef struct sim_ctx_s {
     unit_status_t status;  // Unit status
     int32_t       temp_mC; // Current temperature
     uint16_t      mask;    // Config mask
-} sim_ctx_t;
+} __attribute__((aligned(8))) sim_ctx_t;
+
+static_assert((sizeof(sim_ctx_t) % 8) == 0, "sim_ctx_t size must be 8-byte aligned");
 
 typedef struct temp_ctrl_cfg_s {
     uint16_t temp_target;     // Range: 50°C - 150°C
@@ -161,6 +164,7 @@ int      cli_init(void **cli_ctx);
 bool     cli_run(void *cli_ctx);
 void     cli_exit(void *cli_ctx);
 void     init_uart(void);
+void     init_pci(void);
 void     init_timestamp(void);
 uint64_t get_timestamp48(void);
 void     init_watchdog(void);
@@ -169,40 +173,40 @@ static void reset_sim_state(bool phy);
 
 // -- Globals --
 
+extern void (*volatile init_port_globals)(void);
 extern volatile bool     keep_running;
 extern SemaphoreHandle_t xInterruptSem;
-TaskHandle_t             xCliHandle = nullptr;
 
 #define NORMAL 0
 #define PAUSE 1
 #define PAUSE_ACK 2
-
 static int  system_mode = NORMAL; // 0 = Normal, 1 = Pause, 2 = Ack the pause
 static bool suspended = true;
 
 // Cli Task resources
 #define CLI_STACK_SIZE (configMINIMAL_STACK_SIZE * 4)
-static StackType_t  cliStack[CLI_STACK_SIZE];
-static StaticTask_t cliTcb;
+alignas(8) static StackType_t cliStack[CLI_STACK_SIZE];
+alignas(8) static StaticTask_t cliTcb;
+alignas(8) TaskHandle_t xCliHandle = nullptr;
 // Ctrl Task resources
 #define CTRL_STACK_SIZE (configMINIMAL_STACK_SIZE * 2) // 2x stack for control logic
-static StackType_t  ctrlStack[CTRL_STACK_SIZE];
-static StaticTask_t ctrlTcb;
-static TaskHandle_t xCtrlHandle = nullptr;
+alignas(8) static StackType_t ctrlStack[CTRL_STACK_SIZE];
+alignas(8) static StaticTask_t ctrlTcb;
+alignas(8) static TaskHandle_t xCtrlHandle = nullptr;
 // HW Task resources
 #define HW_STACK_SIZE (configMINIMAL_STACK_SIZE * 2) // 2x stack for simulation
-static StackType_t  hwStack[HW_STACK_SIZE];
-static StaticTask_t hwTcb;
-static TaskHandle_t xHwHandle = nullptr;
+alignas(8) static StackType_t hwStack[HW_STACK_SIZE];
+alignas(8) static StaticTask_t hwTcb;
+alignas(8) static TaskHandle_t xHwHandle = nullptr;
 // Idle Task resources
-static StaticTask_t idleTcb;
-static StackType_t  idleStack[configMINIMAL_STACK_SIZE];
+alignas(8) static StaticTask_t idleTcb;
+alignas(8) static StackType_t idleStack[configMINIMAL_STACK_SIZE];
 // Timer Task resources
-static StaticTask_t timerTcb;
-static StackType_t  timerStack[configTIMER_TASK_STACK_DEPTH];
+alignas(8) static StaticTask_t timerTcb;
+alignas(8) static StackType_t timerStack[configTIMER_TASK_STACK_DEPTH];
 // Simulation data
-static sim_ctx_t      sim_ctx;
-static temp_reg_cfg_t sim_cfg;
+alignas(8) static sim_ctx_t sim_ctx;
+alignas(8) static temp_reg_cfg_t sim_cfg;
 
 // -- End of globals --
 
@@ -653,7 +657,7 @@ void vCLITask(void *pvParameters)
     (void)pvParameters;
 
     if (cli_init(&cli_ctx) != 0) {
-        printf("[RTOS] Failed to initialize CLI context\n");
+        printf("\r[RTOS] Failed to initialize CLI context\n");
         vTaskDelete(nullptr);
         return;
     }
@@ -680,7 +684,7 @@ void vHardwareSimTask(void *pvParameters)
     uint32_t              ms_counter = 0;
     bool                  resume = false;
 
-    printf("[RTOS] HW Simulation Suspended.\n");
+    printf("\r[RTOS] HW Simulation Suspended.\n");
     vTaskSuspend(NULL);
 
     LOG_SYS_INFO("HW Simulation Awaken.");
@@ -814,7 +818,7 @@ void vGPIOControlTask(void *pvParameters)
 {
     volatile gpio_ctrl_t *gpio = (volatile gpio_ctrl_t *)pvParameters;
 
-    printf("[RTOS] Temperature Control Suspended.\n");
+    printf("\r[RTOS] Temperature Control Suspended.\n");
     vTaskSuspend(NULL);
     LOG_SYS_INFO("Temperature Control Awaken.");
 
@@ -859,10 +863,15 @@ int main(void)
     alignas(8) static volatile gpio_ctrl_t gpio; // Local instance of GPIO registers -
                                                  // simulated memory-mapped hardware
 #ifdef BARE_METAL
+    if (init_port_globals)
+        init_port_globals();
     init_timestamp();
     init_uart();
     init_watchdog();
+#ifdef ENABLE_PCI
+    init_pci();
 #endif
+#endif                    // end of BARE_METAL
     get_timestamp48();    // start time
     gpio_set_regs(&gpio); // Set the base address for the GPIO driver
 #ifndef BARE_METAL
@@ -876,7 +885,7 @@ int main(void)
         cliStack, &cliTcb
     );
     if (xCliHandle == nullptr) {
-        printf("[RTOS] Failed to create CLI task\n");
+        printf("\r[RTOS] Failed to create CLI task\n");
         return -1;
     }
 
@@ -887,7 +896,7 @@ int main(void)
         ctrlStack, &ctrlTcb
     );
     if (xCtrlHandle == nullptr) {
-        printf("[RTOS] Failed to create GPIO Controller task\n");
+        printf("\r[RTOS] Failed to create GPIO Controller task\n");
         return -1;
     }
     // Create Hardware Simulator Task (Priority: High)
@@ -897,7 +906,7 @@ int main(void)
         hwStack, &hwTcb
     );
     if (xHwHandle == nullptr) {
-        printf("[RTOS] Failed to create Hardware Simulator task\n");
+        printf("\r[RTOS] Failed to create Hardware Simulator task\n");
         return -1;
     }
 #ifndef BARE_METAL
@@ -909,7 +918,7 @@ int main(void)
     // Unblock in all threads (POSIX)
     pthread_sigmask(SIG_UNBLOCK, &set, nullptr);
 #endif
-    printf("[RTOS] Starting Scheduler...\n");
+    printf("\r[RTOS] Starting Scheduler...\n");
     /*
      * Start the scheduler.
      * In the POSIX port, this will take over the main thread.

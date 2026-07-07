@@ -9,6 +9,7 @@
  */
 #include <stdint.h>
 
+#include "event.h"
 #include "log.h"
 #include "log_marker.h"
 #include "utils.h"
@@ -35,12 +36,12 @@
 #define CORE_FREQ 108000000ULL
 #define TICK_DIVISOR 4000                               // Timer clock is 1/4 of Core clock on GD32VF
 #define TICK_INTERVAL (CORE_FREQ / TICK_DIVISOR / 1000) // 1ms tick interval
-#else // Renode
+#else                                                   // Renode
 #define MTIME_LO (*(volatile uint32_t *)(MTIMER_BASE + 0xBFF8))
 #define MTIME_HI (*(volatile uint32_t *)(MTIMER_BASE + 0xBFFC))
 #define MTIMECMP_LO (*(volatile uint32_t *)(MTIMER_BASE + 0x4000))
 #define MTIMECMP_HI (*(volatile uint32_t *)(MTIMER_BASE + 0x4004))
-#define TICK_INTERVAL 1000 
+#define TICK_INTERVAL 1000
 #endif
 
 static uint64_t boot_ts = 0;
@@ -85,7 +86,6 @@ void init_systick(void)
     __asm volatile("csrs mstatus, %0" : : "r"(0x8));
 }
 
-extern volatile uint8_t  event_notify;
 static volatile uint32_t system_ticks = 0;
 
 void IRQ_HANDLER timer_handler(void)
@@ -102,7 +102,7 @@ void IRQ_HANDLER timer_handler(void)
      */
     if ((system_ticks & (1024 - 1)) == 0) {
         LOG_SYS_DEBUG("SysTick: %lu", (unsigned long)(system_ticks));
-        event_notify |= BIT(0); // Set SysTick event flag
+        event_notify |= EVT_SYS_TICK; // Set SysTick event flag
     }
 }
 

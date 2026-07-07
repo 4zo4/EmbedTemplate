@@ -31,9 +31,10 @@ typedef enum {
 #define ENT_CLI "\x02"
 #define ENT_LOG "\x03"
 #define ENT_GPIO "\x04"
-#define ENT_SYSCTRL "\x05"
-#define ENT_TIMER "\x06"
-#define ENT_UART "\x07"
+#define ENT_PCI "\x05"
+#define ENT_SYSCTRL "\x06"
+#define ENT_TIMER "\x07"
+#define ENT_UART "\x08"
 
 // Entity IDs
 typedef enum {
@@ -42,6 +43,7 @@ typedef enum {
     ENTITY_CLI,
     ENTITY_LOG,
     ENTITY_GPIO,
+    ENTITY_PCI,
     ENTITY_SYSCTRL,
     ENTITY_TIMER,
     ENTITY_UART,

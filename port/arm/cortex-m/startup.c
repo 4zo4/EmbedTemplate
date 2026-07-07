@@ -1,7 +1,7 @@
 /**
  * @file startup.c
- * @brief Startup code and interrupt vector table for STM32F4.
- * This file defines the reset handler, default interrupt handlers, and the interrupt vector table for the STM32F4 microcontroller.
+ * @brief Startup code and interrupt vector table for Cortex-M4.
+ * This file defines the reset handler, default interrupt handlers, and the interrupt vector table for the Cortex-M4 microcontroller.
  * It sets up the initial stack pointer, copies the .data section from flash to RAM, zeroes the .bss section, and then jumps to the main function.
  * The interrupt handlers include the default handlers for NMI, Hard Fault, Memory Management Fault, Bus Fault, Usage Fault, and Debug Monitor, as well as the UART1 interrupt handler and the Watchdog interrupt handler.
  * The vector table is placed in the .isr_vector section and is aligned to 8 bytes as required by the Cortex-M4 architecture.
@@ -81,6 +81,6 @@ void (*const vector_table[])(void) = {
     [15] = SysTick_Handler,   // 15: SysTick
 #endif
     [16] = WWDG_irq_handler,  // 16: Watchdog IRQ 0
-    [53] = UART1_irq_handler, // 53: STM32F4 UART1 is IRQ 37 (No 53 with Cortex-M4 offset 16 for system IRQs)
+    [53] = UART1_irq_handler, // 53: Cortex-M4 UART1 is IRQ 37 (No 53 with Cortex-M4 offset 16 for system IRQs)
 };
 // clang-format on

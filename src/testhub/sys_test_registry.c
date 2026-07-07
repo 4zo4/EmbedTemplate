@@ -6,9 +6,9 @@
 #include "test_log.h"
 #include "utils.h"
 
-const test_registry_t sys_test_registry[] = {
-    [CLI] = {"CLI", CLI_tests, CLI_TEST_NUM, true},
-    [LOG] = {"LOG", LOG_tests, LOG_TEST_NUM, true},
+alignas(8) test_registry_t sys_test_registry[] = {
+    [CLI] = {"CLI", CLI_tests, &CLI_num_tests, CLI_TEST_NUM, true},
+    [LOG] = {"LOG", LOG_tests, &LOG_num_tests, LOG_TEST_NUM, true},
 };
 
 static_assert(

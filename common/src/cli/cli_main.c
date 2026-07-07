@@ -5,7 +5,6 @@
 
 #include <assert.h>
 #include <signal.h>
-#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -85,7 +84,8 @@ cli_data_t cli_data = {
 #define MAP_APP_CONTEXT 0x1
 #define NUM_APP_CONTEXT 1
 #endif
-static alignas(8) uint64_t cli_mem[CLI_MEM_SIZE / sizeof(uint64_t)];
+
+__attribute__((section(".cli_mem"), used)) static alignas(8) uint64_t cli_mem[CLI_MEM_SIZE / sizeof(uint64_t)];
 static struct termios orig_termios;
 
 // -- End of globals --
@@ -276,6 +276,8 @@ const char *entity_name(uint8_t entity, bool cap)
         return cap ? "LOG" : "log";
     case ENTITY_GPIO:
         return cap ? "GPIO" : "gpio";
+    case ENTITY_PCI:
+        return cap ? "PCI" : "pci";
     case ENTITY_SYSCTRL:
         return cap ? "SYSCTRL" : "sysctrl";
     case ENTITY_TIMER:
@@ -388,11 +390,11 @@ int cli_init(void **cli_ctx)
 
     uint16_t requiredCliBufferSize = embeddedCliRequiredSize(config);
 
-    printf("[INFO] CLI buffer (%p) allocated " STR(CLI_MEM_SIZE) " required %u bytes\n", cli_mem, requiredCliBufferSize);
+    printf("\r[INFO] CLI buffer (%p) allocated " STR(CLI_MEM_SIZE) " required %u bytes\n", cli_mem, requiredCliBufferSize);
     EmbeddedCli *cli = embeddedCliNew(config);
 
     if (cli == nullptr) {
-        printf("%s:%d: [ERROR] embeddedCliNew: returned null\n", __func__, __LINE__);
+        printf("\r%s:%d: [ERROR] embeddedCliNew: returned null\n", __func__, __LINE__);
         return -1;
     }
     signal(SIGTERM, signal_handler);
@@ -499,7 +501,7 @@ bool cli_run(void *cli_ctx)
         embeddedCliReceiveChar(cli, c);
         embeddedCliProcess(cli);
     }
-    return true;
+    return keep_running;
 }
 
 void cli_exit(void *cli_ctx)

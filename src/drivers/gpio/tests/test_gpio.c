@@ -1,4 +1,3 @@
-
 #include <stdint.h>
 
 #include "gpio_demo_regs.h"
@@ -11,6 +10,8 @@
 // prototypes without include file
 bool sim_pause(void);
 void sim_resume(void);
+
+#ifdef ENABLE_GPIO
 
 int test_gpio_init(char *args)
 {
@@ -62,6 +63,7 @@ int test_gpio_functionality(char *args)
     return 0; // Return 0 on success
 }
 
+const int   GPIO_num_tests = GPIO_TEST_NUM;
 test_desc_t GPIO_tests[] = {
     {"GPIO_Init",  test_gpio_init,          true},
     {"GPIO_Func",  test_gpio_functionality, true},
@@ -73,3 +75,10 @@ test_desc_t GPIO_tests[] = {
 };
 
 static_assert(sizeof(GPIO_tests) / sizeof(GPIO_tests[0]) == GPIO_TEST_NUM, "GPIO tests out of range");
+
+#else // !ENABLE_GPIO
+
+const int   GPIO_num_tests = 0;
+test_desc_t GPIO_tests[] = {{0}};
+
+#endif // ENABLE_GPIO

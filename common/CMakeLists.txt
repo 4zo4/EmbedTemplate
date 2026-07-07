@@ -22,7 +22,6 @@ set(TFA_LIBC_SOURCES
     ${TFA_LIBC_SRC_DIR}/snprintf.c
     ${TFA_LIBC_SRC_DIR}/memset.c
     ${TFA_LIBC_SRC_DIR}/memcpy.c
-    ${TFA_LIBC_SRC_DIR}/memmove.c
     ${TFA_LIBC_SRC_DIR}/strlen.c
     ${TFA_LIBC_SRC_DIR}/strcmp.c
     ${TFA_LIBC_SRC_DIR}/memmove.c  # Used for buffer shifts
@@ -30,7 +29,7 @@ set(TFA_LIBC_SOURCES
     ${TFA_LIBC_SRC_DIR}/strchr.c   # Used for arg parsing
     ${TFA_LIBC_SRC_DIR}/strlcpy.c  # Safer string copying
 )
-set(MOCK_SOURCES
+set(TFA_LIBC_MOCK_SOURCES
     ${MOCK_LIBC_SRC_DIR}/assert.c  # Custom __assert_func + Panic Dump
     ${MOCK_LIBC_SRC_DIR}/termios.c # Custom termios bridge
     ${MOCK_LIBC_SRC_DIR}/stdio.c   # Mock fflush
@@ -45,7 +44,7 @@ else()
 endif()
 set(TFA_ARCH_INC "${TFA_LIBC_INC_DIR}/${TFA_ARCH_SUBDIR}")
 # Build the TFA Libc Object Library
-add_library(tfa_libc_lib OBJECT ${TFA_LIBC_SOURCES} ${MOCK_SOURCES})
+add_library(tfa_libc_lib OBJECT ${TFA_LIBC_SOURCES} ${TFA_LIBC_MOCK_SOURCES})
 target_include_directories(tfa_libc_lib PRIVATE
     ${TFA_ARCH_INC} # TF-A Arch-Specific Headers
     ${MOCK_LIBC_INC_DIR} # selected libc mocks
@@ -65,7 +64,7 @@ if(RTOS)
         set(FREERTOS_PORT_DIR "${FREERTOS_DIR}/portable/GCC/${FREERTOS_PORT}")
         set(FREERTOS_PORT_SOURCES "")
         set(FREERTOS_MOCK_SOURCES "")
-        if(TARGET_ARCH STREQUAL "riscv")
+        if("${TARGET_ARCH}" STREQUAL "riscv" OR "${FREERTOS_PORT}" STREQUAL "ARM_CA9")
             list(APPEND FREERTOS_PORT_SOURCES "${FREERTOS_PORT_DIR}/portASM.S")
         endif()
         list(APPEND FREERTOS_PORT_SOURCES "${FREERTOS_PORT_DIR}/port.c")
@@ -91,15 +90,32 @@ if(RTOS)
         ${THIS_DIR}/include/os/freertos # freertos config
     )
     target_compile_options(freertos_lib PRIVATE -D_REENTRANT -O3)
+    if(ENABLE_TARGET_CHIP)
+        target_compile_definitions(freertos_lib PRIVATE "${ENABLE_TARGET_CHIP}")
+    endif()
+    if("${FREERTOS_PORT}" STREQUAL "ARM_CA9")
+        target_compile_definitions(freertos_lib PRIVATE __ARM_ARCH_7A__)
+    endif()
 endif()
 
 # --- CLI (cli_lib) ---
+set(TARGET_CLI_INC_DIRS
+    ${THIS_DIR}/include
+    ${ARCH_INC_DIR}
+    ${CLI_INC_DIR}
+    ${DRV_INC_DIR}
+    ${LOG_INC_DIRS}
+    ${THIRD_PARTY_CLI_LIB_INC_DIR}
+)
+if(CLI)
+# full CLI
 set(CLI_SOURCES
     ${THIS_DIR}/src/cli/cli_main.c
     ${THIS_DIR}/src/cli/cli_system.c
 )
 add_library(cli_lib OBJECT ${CLI_SOURCES})
 if(TEST)
+    list(APPEND TARGET_CLI_INC_DIRS ${TEST_INC_DIR})
     target_sources(cli_lib PRIVATE ${THIS_DIR}/src/cli/cli_test.c)
     target_compile_definitions(cli_lib PRIVATE ENABLE_TEST)
 else()
@@ -110,22 +126,20 @@ if(RTOS)
 else()
     target_sources(cli_lib PRIVATE ${THIS_DIR}/src/cli/cli_no_sim.c)
 endif()
+# CLI uses embedded cli lib
+target_link_libraries(cli_lib PUBLIC embedded_cli_lib)
+else()
+# minimal CLI
+set(CLI_SOURCES
+    ${THIS_DIR}/src/cli/cli_mini.c
+)
+add_library(cli_lib OBJECT ${CLI_SOURCES})
+endif()
 if(BARE_METAL)
     target_compile_definitions(cli_lib PRIVATE BARE_METAL)
 endif()
-
-# CLI uses embedded cli lib
-target_link_libraries(cli_lib PUBLIC embedded_cli_lib)
 target_include_directories(cli_lib BEFORE PRIVATE ${MOCK_LIBC_INC_DIR})
-target_include_directories(cli_lib PRIVATE
-    ${THIS_DIR}/include
-    ${ARCH_INC_DIR}
-    ${CLI_INC_DIR}
-    ${DRV_INC_DIR}
-    ${LOG_INC_DIRS}
-    ${TEST_INC_DIR}
-    ${THIRD_PARTY_CLI_LIB_INC_DIR}
-)
+target_include_directories(cli_lib PRIVATE ${TARGET_CLI_INC_DIRS})
 target_compile_options(cli_lib PRIVATE -ffreestanding -fno-builtin -O3)
 
 # --- Infrastructure (infra_lib) ---
@@ -155,15 +169,17 @@ set_source_files_properties(
 target_compile_options(infra_lib PRIVATE -ffreestanding -fno-builtin -O3)
 
 # --- Embedded CLI (embedded_cli_lib) ---
+if(CLI)
 set(EMBEDDED_CLI_SRC ${THIRD_PARTY_CLI_LIB_DIR}/src/embedded_cli.c)
 add_library(embedded_cli_lib OBJECT ${EMBEDDED_CLI_SRC})
 target_include_directories(embedded_cli_lib PRIVATE
     ${MOCK_LIBC_INC_DIR}
     ${THIRD_PARTY_CLI_LIB_INC_DIR}
 )
-target_compile_options(embedded_cli_lib PRIVATE 
-    -ffreestanding 
-    -nostdlib 
-    -fno-builtin 
+target_compile_options(embedded_cli_lib PRIVATE
+    -ffreestanding
+    -nostdlib
+    -fno-builtin
     -O3
 )
+endif()

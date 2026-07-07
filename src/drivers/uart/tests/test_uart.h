@@ -7,3 +7,4 @@
 
 #define UART_TEST_NUM 4
 extern test_desc_t UART_tests[];
+extern const int   UART_num_tests;

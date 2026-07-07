@@ -8,6 +8,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+// #define DEBUG // Uncomment to enable breadcrumb tracking
+
 #include "block_id.h"
 #include "cli.h"
 #include "embedded_cli.h"
@@ -78,14 +80,6 @@ typedef struct name_id_s {
     uint32_t hash;
     int      id;
 } name_id_t;
-
-#ifdef DEBUG
-#define DEF_BREADCRUMB(breadcrumb, size) uint##size##_t breadcrumb = 0
-#define ADD_BREADCRUMB(breadcrumb, step) breadcrumb |= BIT(step)
-#else
-#define DEF_BREADCRUMB(breadcrumb, size) do {} while(0)
-#define ADD_BREADCRUMB(breadcrumb, step) do {} while(0)
-#endif
 
 // helper counting macros
 #define COUNT_L2(str_array) (sizeof(str_array) / sizeof(char *) - 1)

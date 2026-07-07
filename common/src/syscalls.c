@@ -7,6 +7,13 @@
  * output to the UART interface, allowing for console I/O functionality.
  */
 #include <errno.h>
+#if __has_include(<sys/reent.h>)
+#include <sys/reent.h>
+#define HAVE_REENT_H
+#elif __has_include(<reent.h>)
+#include <reent.h>
+#define HAVE_REENT_H
+#endif
 #include <stdint.h>
 #include <stdio.h>
 #include <sys/stat.h>
@@ -100,7 +107,8 @@ __attribute__((weak)) __attribute__((noreturn)) void _exit(int status)
     }
 }
 
-void exit(int status) {
+void exit(int status)
+{
     (void)status;
     _exit(status);
 }
@@ -151,10 +159,76 @@ __attribute__((weak)) void *malloc(size_t size)
     return (void *)0;
 }
 
+#ifdef HAVE_REENT_H
+__attribute__((weak)) void *_malloc_r(struct _reent *r, size_t size)
+{
+    (void)r;
+    (void)size;
+    return (void *)0;
+}
+
+__attribute__((weak)) void _free_r(struct _reent *r, void *ptr)
+{
+    (void)r;
+    (void)ptr;
+}
+
+__attribute__((weak)) void *_realloc_r(struct _reent *r, void *ptr, size_t size)
+{
+    (void)r;
+    (void)ptr;
+    (void)size;
+    return (void *)0;
+}
+
+__attribute__((weak)) void *_calloc_r(struct _reent *r, size_t nmemb, size_t size)
+{
+    (void)r;
+    (void)nmemb;
+    (void)size;
+    return (void *)0;
+}
+
+__attribute__((weak)) int _close_r(struct _reent *r, int file)
+{
+    return 0;
+}
+
+__attribute__((weak)) int _fstat_r(struct _reent *r, int file, struct stat *st)
+{
+    st->st_mode = S_IFCHR;
+    return 0;
+}
+
+__attribute__((weak)) int _isatty_r(struct _reent *r, int file)
+{
+    return 1;
+}
+
+__attribute__((weak)) off_t _lseek_r(struct _reent *r, int file, off_t ptr, int dir)
+{
+    return 0;
+}
+
+__attribute__((weak)) _ssize_t _read_r(struct _reent *r, int file, void *ptr, size_t len)
+{
+    return _read(file, ptr, (int)len);
+}
+
+__attribute__((weak)) _ssize_t _write_r(struct _reent *r, int file, const void *ptr, size_t len)
+{
+    return _write(file, (char *)ptr, (int)len);
+}
+
+static struct _reent mock_reent;
+
+struct _reent *_impure_ptr = &mock_reent;
+#endif // HAVE_REENT_H
+
 // Dummy FILE structures for stdin, stdout, and stderr (works for newlib and picolibc)
 #undef stdin
 #undef stdout
 #undef stderr
-FILE *const stdin = (void*)0;
-FILE *const stdout = (void*)0;
-FILE *const stderr = (void*)0;
+FILE *const stdin = (void *)0;
+FILE *const stdout = (void *)0;
+FILE *const stderr = (void *)0;

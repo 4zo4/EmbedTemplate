@@ -7,3 +7,4 @@
 
 #define GPIO_TEST_NUM 7
 extern test_desc_t GPIO_tests[];
+extern const int   GPIO_num_tests;

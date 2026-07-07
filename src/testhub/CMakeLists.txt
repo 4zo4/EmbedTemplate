@@ -18,6 +18,7 @@ set(DRV_INC_DIRS
 # Paths to the drivers' test headers
 set(TEST_DEV_INC_DIRS
     ${PATH_DRIVERS}/gpio/tests
+    ${PATH_DRIVERS}/pci/tests
     ${PATH_DRIVERS}/sysctrl/tests
     ${PATH_DRIVERS}/timer/tests
     ${PATH_DRIVERS}/uart/tests
@@ -26,10 +27,31 @@ set(TEST_DEV_INC_DIRS
 set(TEST_DEV_SOURCES
     dev_test_registry.c # device test registry
     ${PATH_DRIVERS}/gpio/tests/test_gpio.c
+    ${PATH_DRIVERS}/pci/tests/test_pci.c
     ${PATH_DRIVERS}/sysctrl/tests/test_sysctrl.c
     ${PATH_DRIVERS}/timer/tests/test_timer.c
     ${PATH_DRIVERS}/uart/tests/test_uart.c
 )
+
+if(ENABLE_GPIO)
+    set_property(SOURCE ${PATH_DRIVERS}/gpio/tests/test_gpio.c APPEND PROPERTY COMPILE_DEFINITIONS ENABLE_GPIO)
+endif()
+
+if(ENABLE_PCI)
+    set_property(SOURCE ${PATH_DRIVERS}/pci/tests/test_pci.c APPEND PROPERTY COMPILE_DEFINITIONS ENABLE_PCI)
+endif()
+
+if(ENABLE_SYSCTRL)
+    set_property(SOURCE ${PATH_DRIVERS}/sysctrl/tests/test_sysctrl.c APPEND PROPERTY COMPILE_DEFINITIONS ENABLE_SYSCTRL)
+endif()
+
+if(ENABLE_TIMER)
+    set_property(SOURCE ${PATH_DRIVERS}/timer/tests/test_timer.c APPEND PROPERTY COMPILE_DEFINITIONS ENABLE_TIMER)
+endif()
+
+if(ENABLE_UART)
+    set_property(SOURCE ${PATH_DRIVERS}/uart/tests/test_uart.c APPEND PROPERTY COMPILE_DEFINITIONS ENABLE_UART)
+endif()
 
 add_library(soc_tests STATIC ${TEST_DEV_SOURCES})
 add_dependencies(soc_tests generated_regs)
@@ -44,7 +66,7 @@ if(RTOS)
     target_compile_definitions(soc_tests PUBLIC ENABLE_RTOS)
 endif()
 
-target_compile_options(soc_tests PRIVATE -Wall -Wextra -O3)
+target_compile_options(soc_tests PRIVATE -fno-builtin-printf -fno-builtin-puts -Wall -Wextra -O3)
 
 set(TEST_SYS_SOURCES
     sys_test_registry.c # system test registry
@@ -52,9 +74,23 @@ set(TEST_SYS_SOURCES
     ${PATH_COMMON_SRC}/diagnostic/logging/tests/test_log.c
 )
 
+if(NOT DEFINED CACHE{ENABLE_CLI})
+    set(ENABLE_CLI TRUE CACHE BOOL "Enable CLI test" FORCE)
+endif()
+if(NOT DEFINED CACHE{ENABLE_LOG})
+    set(ENABLE_LOG TRUE CACHE BOOL "Enable LOG test" FORCE)
+endif()
+
 set_source_files_properties(${PATH_COMMON_SRC}/cli/tests/test_cli.c
                             PROPERTIES
                             INCLUDE_DIRECTORIES "${SPEC_INC_DIR}")
+if(ENABLE_CLI)
+    set_property(SOURCE ${PATH_COMMON_SRC}/cli/tests/test_cli.c APPEND PROPERTY COMPILE_DEFINITIONS ENABLE_CLI)
+endif()
+
+if(ENABLE_LOG)
+    set_property(SOURCE ${PATH_COMMON_SRC}/diagnostic/logging/tests/test_log.c APPEND PROPERTY COMPILE_DEFINITIONS ENABLE_LOG)
+endif()
 
 set(TEST_SYS_INC_DIRS
     ${PATH_DRIVERS}/include
@@ -63,7 +99,7 @@ set(TEST_SYS_INC_DIRS
 )
 
 add_library(sys_tests STATIC ${TEST_SYS_SOURCES})
-target_compile_options(sys_tests PRIVATE -Wall -Wextra -O3)
+target_compile_options(sys_tests PRIVATE -fno-builtin-printf -fno-builtin-puts -Wall -Wextra -O3)
 target_include_directories(sys_tests PRIVATE
     ${COMMON_INC_DIRS}
     ${TEST_SYS_INC_DIRS}
