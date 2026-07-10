@@ -18,6 +18,7 @@
 #define configCPU_CLOCK_HZ (24000000UL) // 24MHz on QEMU
 #define configINTERRUPT_CONTROLLER_BASE_ADDRESS (0x08000000UL)
 #define configINTERRUPT_CONTROLLER_CPU_INTERFACE_OFFSET (0x00010000UL)
+#define configINTERRUPT_SPLIT_DEACTIVATION 1
 #define configMAX_PRIORITIES (5)
 #define configMAX_API_CALL_INTERRUPT_PRIORITY (18)
 #define configKERNEL_INTERRUPT_PRIORITY (31)
@@ -102,7 +103,11 @@ void clear_systick(void);
 #define INCLUDE_xTimerPendFunctionCall 1
 
 /* Assert Definition */
+#ifndef __ASSEMBLER__
 #include <assert.h>
 #define configASSERT(x) assert(x)
+#else
+#define configASSERT(x)
+#endif
 
 #endif /* FREERTOS_CONFIG_H */
