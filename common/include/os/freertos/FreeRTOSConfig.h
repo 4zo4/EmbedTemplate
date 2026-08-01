@@ -9,7 +9,7 @@
 #else // TARGET_HW_GD32VF103
 #define configMTIME_BASE_ADDRESS (0xD1000000UL + 0xBFF8UL)
 #define configMTIMECMP_BASE_ADDRESS (0xD1000000UL + 0x4000UL)
-#endif
+#endif                                                // GD32VF103
 #define configCPU_CLOCK_HZ ((unsigned long)108000000) // 108MHz
 #define configMAX_PRIORITIES (7)
 #elif defined(ARCH_ARM)
@@ -31,7 +31,7 @@
 void init_systick(void);
 void clear_systick(void);
 #endif // !__ASSEMBLER__
-#endif
+#endif // CORTEX_A9_VIRT
 #ifdef TARGET_STM32F4
 /* STM32F4 Specifics */
 #define configCPU_CLOCK_HZ ((unsigned long)168000000) // 168MHz
@@ -43,18 +43,33 @@ void clear_systick(void);
 #define xPortSysTickHandler SysTick_Handler
 #define configKERNEL_INTERRUPT_PRIORITY (configLIBRARY_LOWEST_INTERRUPT_PRIORITY << (8 - configPRIO_BITS))
 #define configMAX_SYSCALL_INTERRUPT_PRIORITY (5 << (8 - configPRIO_BITS))
-#endif
+#endif // STM32F4
 #elif defined(ARCH_X86)
-#define configCPU_CLOCK_HZ ((unsigned long)1000000)
-#define configMAX_PRIORITIES (7)
-#define configKERNEL_INTERRUPT_PRIORITY 1
+#ifdef TARGET_X86_VIRT
+#define configUSE_PORT_OPTIMISED_TASK_SELECTION 1
+#define configUSE_COMMON_INTERRUPT_ENTRY_POINT 1
+#define configUSE_IOAPIC_EOI 1
+#define xPortIoapicEoiHandler ioapic_eoi
+#ifndef __ASSEMBLER__
+void ioapic_eoi(uint32_t vector_id);
+#endif // !__ASSEMBLER__
+#define configMAX_API_CALL_INTERRUPT_PRIORITY 15
+#define configMAX_SYSCALL_INTERRUPT_PRIORITY 15
+#define configISR_STACK_SIZE 512        // 2KB
+#define configCPU_CLOCK_HZ 1000000000UL // 1GHz
+#define configEOI_ADDRESS 0xFEE000B0UL
+#else // X86_HOST
+#define configCPU_CLOCK_HZ 1000000UL
 #define configMAX_SYSCALL_INTERRUPT_PRIORITY 1
 #endif
+#define configMAX_PRIORITIES 7
+#define configKERNEL_INTERRUPT_PRIORITY 1
+#endif // ARCH_X86
 
 /* --- Global Settings --- */
 #define configUSE_IDLE_HOOK (1)
 #define configTICK_RATE_HZ ((TickType_t)1000)
-#define configMINIMAL_STACK_SIZE ((unsigned short)256)
+#define configMINIMAL_STACK_SIZE 256 // 1 KB
 /* Kernel Settings */
 #define configUSE_PREEMPTION 1
 #define configUSE_TICKLESS_IDLE 0
