@@ -22,9 +22,11 @@ set(TARGET_CHIP_LIB_SOURCES
     ${CORTEX_A_DIR}/gic.c
     ${CORTEX_A_DIR}/startup.S
     ${CORTEX_A_DIR}/time.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/pci.c
     ${CMAKE_CURRENT_SOURCE_DIR}/port.c
 )
+if(ENABLE_PCI)
+    list(APPEND TARGET_CHIP_LIB_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/pci.c")
+endif()
 add_library(cortex-a9-virt_lib OBJECT
     ${TARGET_CHIP_LIB_SOURCES}
 )
@@ -53,6 +55,10 @@ target_compile_options(cortex-a9-virt_lib PRIVATE
     -O3
 )
 
+target_compile_definitions(cortex-a9-virt_lib PRIVATE BARE_METAL)
+if(ENABLE_PCI)
+    target_compile_definitions(cortex-a9-virt_lib PRIVATE ENABLE_PCI)
+endif()
 if(RTOS)
     target_compile_definitions(cortex-a9-virt_lib PRIVATE ENABLE_RTOS "${ENABLE_TARGET_CHIP}")
 endif()

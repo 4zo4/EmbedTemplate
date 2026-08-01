@@ -18,6 +18,8 @@
 #include "test_registry.h"
 #include "utils.h"
 
+#define MAP_TEST_APP_CONTEXT 0xC
+
 // guard macro substitutions for standard i/o functions
 #undef getchar
 #undef putchar
@@ -210,13 +212,13 @@ void show_test_select_menu(EmbeddedCli *cli)
 {
     cli_clear_menu_region();
     cli_data.test = TEST_INVALID;
-    embeddedCliSetAppContext(0xC);
+    embeddedCliSetAppContext(MAP_TEST_APP_CONTEXT);
     // clang-format off
     const char *msg =
-        "\nTest Groups:\r\n"
+        "\rTest Groups:\r\n"
         " dev - Enter Device Test Menu\r\n"
         " sys - Enter System Test Menu\r\n"
-        "\nUsage: <name> (with TAB), 'quit' or 'q', 'back' to previous menu";
+        "Usage: <name> (with TAB), 'quit' or 'q', 'back' to previous menu";
     // clang-format on
     embeddedCliPrint(cli, msg);
     print_msg(cli);
@@ -236,7 +238,8 @@ void set_test_commands(EmbeddedCli *cli)
 {
     uint16_t bid;
 
-    bid = embeddedCliAddBinding(cli, (CliCommandBinding){"test", BINDING_FLAG_HIDDEN, nullptr, on_test_menu});
+    // command name 'test' appears in other application context
+    bid = embeddedCliAddBinding(cli, (CliCommandBinding){"test", BINDING_FLAG_HIDDEN | BINDING_FLAG_APP_CONTEXT, nullptr, on_test_menu});
     cli_data.bindings[1] = bid;
     bid = embeddedCliAddBinding(cli, (CliCommandBinding){"dev", BINDING_FLAG_HIDDEN, nullptr, on_dev_test_menu});
     cli_data.bindings[2] = bid;

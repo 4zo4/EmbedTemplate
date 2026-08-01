@@ -64,7 +64,9 @@ if(RTOS)
         set(FREERTOS_PORT_DIR "${FREERTOS_DIR}/portable/GCC/${FREERTOS_PORT}")
         set(FREERTOS_PORT_SOURCES "")
         set(FREERTOS_MOCK_SOURCES "")
-        if("${TARGET_ARCH}" STREQUAL "riscv" OR "${FREERTOS_PORT}" STREQUAL "ARM_CA9")
+        if("${TARGET_ARCH}" STREQUAL "riscv" OR
+            "${FREERTOS_PORT}" STREQUAL "ARM_CA9" OR
+            "${FREERTOS_PORT}" STREQUAL "IA32_flat")
             list(APPEND FREERTOS_PORT_SOURCES "${FREERTOS_PORT_DIR}/portASM.S")
         endif()
         list(APPEND FREERTOS_PORT_SOURCES "${FREERTOS_PORT_DIR}/port.c")
@@ -89,7 +91,8 @@ if(RTOS)
         ${THIS_DIR}/include # for common terminal codes
         ${THIS_DIR}/include/os/freertos # freertos config
     )
-    target_compile_options(freertos_lib PRIVATE -D_REENTRANT -O3)
+    target_compile_options(freertos_lib PRIVATE $<$<COMPILE_LANGUAGE:ASM>:-Wa,--no-warn>)
+    target_compile_options(freertos_lib PRIVATE -D_REENTRANT -ffreestanding -fno-builtin -O3)
     if(ENABLE_TARGET_CHIP)
         target_compile_definitions(freertos_lib PRIVATE "${ENABLE_TARGET_CHIP}")
     endif()
@@ -126,6 +129,9 @@ if(RTOS)
 else()
     target_sources(cli_lib PRIVATE ${THIS_DIR}/src/cli/cli_no_sim.c)
 endif()
+if(ENABLE_SIM)
+    target_compile_definitions(cli_lib PRIVATE ENABLE_SIM)
+endif()
 # CLI uses embedded cli lib
 target_link_libraries(cli_lib PUBLIC embedded_cli_lib)
 else()
@@ -137,7 +143,10 @@ add_library(cli_lib OBJECT ${CLI_SOURCES})
 endif()
 if(BARE_METAL)
     target_compile_definitions(cli_lib PRIVATE BARE_METAL)
-endif()
+    if(ENABLE_PCI)
+        target_compile_definitions(cli_lib PRIVATE ENABLE_PCI)
+    endif() # ENABLE_PCI
+endif() # BARE_METAL
 target_include_directories(cli_lib BEFORE PRIVATE ${MOCK_LIBC_INC_DIR})
 target_include_directories(cli_lib PRIVATE ${TARGET_CLI_INC_DIRS})
 target_compile_options(cli_lib PRIVATE -ffreestanding -fno-builtin -O3)
@@ -162,6 +171,12 @@ target_include_directories(infra_lib PRIVATE
     ${ARCH_INC_DIR}
     ${LOG_INC_DIRS}
 )
+if(LOG_BUF_SIZE)
+    set_source_files_properties(
+        ${THIS_DIR}/src/diagnostic/logging/log_infra.c
+        PROPERTIES COMPILE_DEFINITIONS "LOG_BUF_SIZE=${LOG_BUF_SIZE}" 
+    )
+endif()
 set_source_files_properties(
     ${THIS_DIR}/src/diagnostic/logging/log_infra.c
     PROPERTIES COMPILE_OPTIONS "-Wno-stringop-overflow"
@@ -170,16 +185,16 @@ target_compile_options(infra_lib PRIVATE -ffreestanding -fno-builtin -O3)
 
 # --- Embedded CLI (embedded_cli_lib) ---
 if(CLI)
-set(EMBEDDED_CLI_SRC ${THIRD_PARTY_CLI_LIB_DIR}/src/embedded_cli.c)
-add_library(embedded_cli_lib OBJECT ${EMBEDDED_CLI_SRC})
-target_include_directories(embedded_cli_lib PRIVATE
-    ${MOCK_LIBC_INC_DIR}
-    ${THIRD_PARTY_CLI_LIB_INC_DIR}
-)
-target_compile_options(embedded_cli_lib PRIVATE
-    -ffreestanding
-    -nostdlib
-    -fno-builtin
-    -O3
-)
+    set(EMBEDDED_CLI_SRC ${THIRD_PARTY_CLI_LIB_DIR}/src/embedded_cli.c)
+    add_library(embedded_cli_lib OBJECT ${EMBEDDED_CLI_SRC})
+    target_include_directories(embedded_cli_lib PRIVATE
+        ${MOCK_LIBC_INC_DIR}
+        ${THIRD_PARTY_CLI_LIB_INC_DIR}
+    )
+    target_compile_options(embedded_cli_lib PRIVATE
+        -ffreestanding
+        -nostdlib
+        -fno-builtin
+        -O3
+    )
 endif()

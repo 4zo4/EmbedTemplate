@@ -33,6 +33,8 @@
 
 #define UART_IRQ_ID 33U
 
+alignas(8) uint32_t initialized;
+
 int putchar(int c)
 {
     // Wait until the transmit FIFO is not full

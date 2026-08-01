@@ -6,6 +6,7 @@
  * The `_read` and `_write` syscalls are implemented to redirect standard input and
  * output to the UART interface, allowing for console I/O functionality.
  */
+#include <assert.h>
 #include <errno.h>
 #if __has_include(<sys/reent.h>)
 #include <sys/reent.h>
@@ -14,6 +15,7 @@
 #include <reent.h>
 #define HAVE_REENT_H
 #endif
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <sys/stat.h>
@@ -24,6 +26,23 @@
 #include "fifo.h"
 
 // Stubs to override the warnings from libc_nano and libnosys
+
+#ifdef ARCH_X86
+#undef errno
+volatile int errno;
+int         *__errno_location(void)
+{
+    return (int *)&errno;
+}
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((noreturn))
+#endif
+void __assert_func(const char *file, int line, const char *func, const char *expr);
+void __assert_fail(const char *assertion, const char *file, unsigned int line, const char *function)
+{
+    __assert_func(file, (int)line, function, assertion);
+}
+#endif
 
 __attribute__((weak)) int _close(int file)
 {
@@ -225,10 +244,16 @@ static struct _reent mock_reent;
 struct _reent *_impure_ptr = &mock_reent;
 #endif // HAVE_REENT_H
 
+#ifndef ARCH_X86
 // Dummy FILE structures for stdin, stdout, and stderr (works for newlib and picolibc)
 #undef stdin
 #undef stdout
 #undef stderr
-FILE *const stdin = (void *)0;
-FILE *const stdout = (void *)0;
-FILE *const stderr = (void *)0;
+#define CONST const
+#else // ARCH_X86
+#define CONST
+#endif
+
+FILE *CONST stdin = (void *)0;
+FILE *CONST stdout = (void *)0;
+FILE *CONST stderr = (void *)0;

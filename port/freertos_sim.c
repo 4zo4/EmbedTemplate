@@ -1,5 +1,5 @@
 /**
- * @file freertos_sim_main.c
+ * @file freertos_sim.c
  * @brief An RTOS-based test for a simulated GPIO-controlled thermal
  * system. This example demonstrates a realistic temperature regulation
  * scenario with a heater, cooling fans, and an over-temperature alarm using
@@ -20,6 +20,7 @@
  * temperature regulation logic, FreeRTOS task management, and FW access to HW
  * concepts.
  */
+#ifdef ENABLE_SIM
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -30,21 +31,22 @@
 #include "semphr.h"
 #include "task.h"
 
-#include "arch_ops.h"
+#include "event.h"
 #include "gpio_demo_regs.h"
 #include "gpio.h"
 #include "log.h"
 #include "log_marker.h"
 #include "pack.h"
-#include "pci.h"
 #include "utils.h"
 
 // Logging Macros for Simulation specific System-Level Messages
-#define LOG_SYS_CRITICAL(...) LOG_ENTITY_CRITICAL(ID_SYS(ENT_SIM), __VA_ARGS__)
-#define LOG_SYS_ERROR(...) LOG_ENTITY_ERROR(ID_SYS(ENT_SIM), __VA_ARGS__)
-#define LOG_SYS_WARNING(...) LOG_ENTITY_WARNING(ID_SYS(ENT_SIM), __VA_ARGS__)
-#define LOG_SYS_INFO(...) LOG_ENTITY_INFO(ID_SYS(ENT_SIM), __VA_ARGS__)
-#define LOG_SYS_DEBUG(...) LOG_ENTITY_DEBUG(ID_SYS(ENT_SIM), __VA_ARGS__)
+#define LOG_SIM_CRITICAL(...) LOG_ENTITY_CRITICAL(ID_SYS(ENT_SIM), __VA_ARGS__)
+#define LOG_SIM_ERROR(...) LOG_ENTITY_ERROR(ID_SYS(ENT_SIM), __VA_ARGS__)
+#define LOG_SIM_WARNING(...) LOG_ENTITY_WARNING(ID_SYS(ENT_SIM), __VA_ARGS__)
+#define LOG_SIM_INFO(...) LOG_ENTITY_INFO(ID_SYS(ENT_SIM), __VA_ARGS__)
+#define LOG_SIM_DEBUG(...) LOG_ENTITY_DEBUG(ID_SYS(ENT_SIM), __VA_ARGS__)
+
+#define SIM_SUSPENDED BIT(0)
 
 // Shift the temperature range to fit into 0-255 range (e.g., -40°C
 // becomes 0, +215°C becomes 255)
@@ -159,118 +161,99 @@ typedef struct temp_reg_cfg_s {
 // Mock alarm interrupt and periodic temperature update signal from the hardware simulator to the temperature regulation
 // vGPIOControlTask for FreeRTOS posix port.
 void init_mock_interrupts(void);
-// CLI Interface (defined in cli_main.c)
-int      cli_init(void **cli_ctx);
-bool     cli_run(void *cli_ctx);
-void     cli_exit(void *cli_ctx);
-void     init_uart(void);
-void     init_pci(void);
-void     init_timestamp(void);
-uint64_t get_timestamp48(void);
-void     init_watchdog(void);
 
+// forward declarations
+void        vGPIOControlTask(void *pvParameters);
+void        vHardwareSimTask(void *pvParameters);
 static void reset_sim_state(bool phy);
 
 // -- Globals --
 
-extern void (*volatile init_port_globals)(void);
-extern volatile bool     keep_running;
 extern SemaphoreHandle_t xInterruptSem;
-
+extern uint32_t          suspended;
 #define NORMAL 0
 #define PAUSE 1
 #define PAUSE_ACK 2
-static int  system_mode = NORMAL; // 0 = Normal, 1 = Pause, 2 = Ack the pause
-static bool suspended = true;
+static int system_mode = NORMAL; // 0 = Normal, 1 = Pause, 2 = Ack the pause
 
-// Cli Task resources
-#define CLI_STACK_SIZE (configMINIMAL_STACK_SIZE * 4)
-alignas(8) static StackType_t cliStack[CLI_STACK_SIZE];
-alignas(8) static StaticTask_t cliTcb;
-alignas(8) TaskHandle_t xCliHandle = nullptr;
 // Ctrl Task resources
 #define CTRL_STACK_SIZE (configMINIMAL_STACK_SIZE * 2) // 2x stack for control logic
 alignas(8) static StackType_t ctrlStack[CTRL_STACK_SIZE];
 alignas(8) static StaticTask_t ctrlTcb;
 alignas(8) static TaskHandle_t xCtrlHandle = nullptr;
+
 // HW Task resources
 #define HW_STACK_SIZE (configMINIMAL_STACK_SIZE * 2) // 2x stack for simulation
 alignas(8) static StackType_t hwStack[HW_STACK_SIZE];
 alignas(8) static StaticTask_t hwTcb;
 alignas(8) static TaskHandle_t xHwHandle = nullptr;
-// Idle Task resources
-alignas(8) static StaticTask_t idleTcb;
-alignas(8) static StackType_t idleStack[configMINIMAL_STACK_SIZE];
-// Timer Task resources
-alignas(8) static StaticTask_t timerTcb;
-alignas(8) static StackType_t timerStack[configTIMER_TASK_STACK_DEPTH];
+
 // Simulation data
 alignas(8) static sim_ctx_t sim_ctx;
 alignas(8) static temp_reg_cfg_t sim_cfg;
-
+alignas(8) static volatile gpio_ctrl_t gpio; // Local instance of GPIO registers -
+                                             // simulated memory-mapped hardware
 // -- End of globals --
 
-void vApplicationGetIdleTaskMemory(
-    StaticTask_t **ppxIdleTaskTCBBuffer, StackType_t **ppxIdleTaskStackBuffer, StackType_t *pulIdleTaskStackSize
-)
+int create_sim_tasks(void)
 {
-    *ppxIdleTaskTCBBuffer = &idleTcb;
-    *ppxIdleTaskStackBuffer = idleStack;
-    *pulIdleTaskStackSize = configMINIMAL_STACK_SIZE;
-}
-
-void vApplicationGetTimerTaskMemory(
-    StaticTask_t **ppxTimerTaskTCBBuffer, StackType_t **ppxTimerTaskStackBuffer, StackType_t *pulTimerTaskStackSize
-)
-{
-    *ppxTimerTaskTCBBuffer = &timerTcb;
-    *ppxTimerTaskStackBuffer = timerStack;
-    *pulTimerTaskStackSize = configTIMER_TASK_STACK_DEPTH;
-}
-
-// FreeRTOS Idle Hook to allow the host CPU to rest when idle
-void vApplicationIdleHook(void)
-{
-#ifdef BARE_METAL
-    HALT_CPU();
-#else
-    /*
-     * Force the Posix thread to sleep for a short duration.
-     * 1000 microseconds = 1ms
-     */
-    usleep(1000);
+    gpio_set_regs(&gpio); // Set the base address for the GPIO driver
+#ifndef BARE_METAL
+    // Create the binary semaphore for interrupt synchronization
+    init_mock_interrupts();
 #endif
+    // Create GPIO Controller Task (Priority: Medium)
+    xCtrlHandle = xTaskCreateStatic(
+        vGPIOControlTask, "GpioCtrlTask", CTRL_STACK_SIZE, (void *)&gpio,
+        tskIDLE_PRIORITY + 2, // Higher than CLI but lower than HwSimTask
+        ctrlStack, &ctrlTcb
+    );
+    if (xCtrlHandle == nullptr) {
+        printf("\r[RTOS] Failed to create GPIO Controller task\n");
+        return -1;
+    }
+    // Create Hardware Simulator Task (Priority: High)
+    xHwHandle = xTaskCreateStatic(
+        vHardwareSimTask, "HwSimTask", HW_STACK_SIZE, (void *)&gpio,
+        configMAX_PRIORITIES - 1, // High priority to ensure timely simulation
+        hwStack, &hwTcb
+    );
+    if (xHwHandle == nullptr) {
+        printf("\r[RTOS] Failed to create Hardware Simulator task\n");
+        return -1;
+    }
+    return 0;
 }
 
-bool is_suspended(void)
+static inline bool is_sim_suspended(void)
 {
-    return suspended;
+    return suspended & SIM_SUSPENDED;
 }
 
 void sim_start(void)
 {
-    if (is_suspended()) {
-        LOG_SYS_INFO("Simulation Starting...");
+    if (is_sim_suspended()) {
+        LOG_SIM_INFO("Simulation Starting...");
         vTaskResume(xCtrlHandle);
         vTaskResume(xHwHandle);
-        suspended = false;
+        suspended &= ~SIM_SUSPENDED;
     }
 }
 
 void sim_suspend(void)
 {
-    if (!is_suspended()) {
-        LOG_SYS_INFO("Simulation Ending (Entering Dormant State)...");
+    if (!is_sim_suspended()) {
+        LOG_SIM_INFO("Simulation Ending (Entering Dormant State)...");
         vTaskSuspend(xHwHandle);
         vTaskSuspend(xCtrlHandle);
         reset_sim_state(false);
-        suspended = true;
+        suspended |= SIM_SUSPENDED;
     }
 }
 
 bool sim_pause(void)
 {
-    if (suspended)
+    if (is_sim_suspended())
         return true;
 
     // Pause hardware simulation
@@ -587,7 +570,7 @@ static void run_temperature_regulation(volatile gpio_ctrl_t *gpio)
         sim_ctx.reg.max_temp = temp;
 
     if ((sim_ctx.reg.time_window++ & (128 - 1)) == 0) {
-        LOG_SYS_INFO("Temp: %d°C | Target: %u°C | Max: %d°C", temp, sim_cfg.ctrl.temp_target, sim_ctx.reg.max_temp);
+        LOG_SIM_INFO("Temp: %d°C | Target: %u°C | Max: %d°C", temp, sim_cfg.ctrl.temp_target, sim_ctx.reg.max_temp);
     }
 
     if (temp > sim_cfg.ctrl.temp_critical || sim_ctx.reg.status.bits.is_critical) {
@@ -595,7 +578,7 @@ static void run_temperature_regulation(volatile gpio_ctrl_t *gpio)
             sim_ctx.reg.status.bits.is_critical = true;
             gpio_set_out_pin(gpio, 2);   // Fan 2 ON
             gpio_clear_out_pin(gpio, 0); // Heater OFF
-            LOG_SYS_WARNING("Temperature %d°C! Emergency Cooling", temp);
+            LOG_SIM_WARNING("Temperature %d°C! Emergency Cooling", temp);
         }
 
         if (temp < sim_cfg.ctrl.temp_cooldown) {
@@ -608,7 +591,7 @@ static void run_temperature_regulation(volatile gpio_ctrl_t *gpio)
 
     if (gpio_is_alarm(gpio) && !sim_ctx.reg.status.bits.is_cooldown) {
         sim_ctx.reg.status.bits.is_cooldown = true;
-        LOG_SYS_WARNING("Over-Temp Alarm! Temperature %d°C Safety Cooling", temp);
+        LOG_SIM_WARNING("Over-Temp Alarm! Temperature %d°C Safety Cooling", temp);
     }
 
     if (sim_ctx.reg.status.bits.is_cooldown) {
@@ -622,7 +605,7 @@ static void run_temperature_regulation(volatile gpio_ctrl_t *gpio)
             }
             sim_ctx.reg.max_temp = temp; // Reset Max Temp for the next clean run
             // clang-format off
-            LOG_SYS_INFO("Temperature %d°C dropped below the threshold %u°C, "
+            LOG_SIM_INFO("Temperature %d°C dropped below the threshold %u°C, "
                          "resuming normal operation", temp, sim_cfg.ctrl.temp_cooldown);
             // clang-format on
         } else {
@@ -651,30 +634,6 @@ static void run_temperature_regulation(volatile gpio_ctrl_t *gpio)
     }
 }
 
-void vCLITask(void *pvParameters)
-{
-    void *cli_ctx = nullptr;
-    (void)pvParameters;
-
-    if (cli_init(&cli_ctx) != 0) {
-        printf("\r[RTOS] Failed to initialize CLI context\n");
-        vTaskDelete(nullptr);
-        return;
-    }
-
-    while (keep_running) {
-        keep_running = cli_run(cli_ctx);
-        /*
-         * We must yield control to the FreeRTOS scheduler to allow
-         * other tasks (and the Idle task) to run.
-         */
-        vTaskDelay(pdMS_TO_TICKS(20));
-    }
-
-    cli_exit(cli_ctx);
-    vTaskDelete(nullptr);
-}
-
 /**
  * @brief The Hardware Simulator
  */
@@ -685,9 +644,10 @@ void vHardwareSimTask(void *pvParameters)
     bool                  resume = false;
 
     printf("\r[RTOS] HW Simulation Suspended.\n");
-    vTaskSuspend(NULL);
+    suspended |= SIM_SUSPENDED;
+    vTaskSuspend(nullptr);
 
-    LOG_SYS_INFO("HW Simulation Awaken.");
+    LOG_SIM_INFO("HW Simulation Awaken.");
     temp_ctrl_cfg_init();
     reset_sim_state(true);
 
@@ -695,7 +655,7 @@ void vHardwareSimTask(void *pvParameters)
         if (system_mode == PAUSE) {
             system_mode = PAUSE_ACK;
             resume = true;
-            LOG_SYS_INFO("HW Simulation Paused. System in Test Mode.");
+            LOG_SIM_INFO("HW Simulation Paused.");
         }
         if (system_mode == PAUSE_ACK) {
             vTaskDelay(pdMS_TO_TICKS(100));
@@ -703,7 +663,7 @@ void vHardwareSimTask(void *pvParameters)
         }
         if (resume) {
             resume = false;
-            LOG_SYS_INFO("HW Simulation Resumed. System in Normal Mode.");
+            LOG_SIM_INFO("HW Simulation Resumed. System in Normal Mode.");
         }
         vTaskDelay(pdMS_TO_TICKS(1)); // 1ms simulation tick
 
@@ -782,7 +742,7 @@ void vHardwareSimTask(void *pvParameters)
                 // Trigger the Alarm IRQ via Unix Signal (SIGIO)
                 kill(getpid(), SIGIO);
 #endif
-                LOG_SYS_DEBUG("Over-Temp Alarm Triggering at %d°C", (sim_ctx.temp_mC / 1000));
+                LOG_SIM_DEBUG("Over-Temp Alarm Triggering at %d°C", (sim_ctx.temp_mC / 1000));
             }
         } else {
             // Temperature dropped below threshold: HW clears the input pin alarm
@@ -807,7 +767,7 @@ void vHardwareSimTask(void *pvParameters)
                 // Shutdown heater, Fan 1 ON (Fan 2 is reserved for critical
                 // runaway scenarios)
                 gpio->out.f.pin_out = 0x02;
-                LOG_SYS_CRITICAL("HW Watchdog Triggered! Forcing Safety Mode.");
+                LOG_SIM_CRITICAL("HW Watchdog Triggered! Forcing Safety Mode.");
             }
         }
     }
@@ -819,8 +779,8 @@ void vGPIOControlTask(void *pvParameters)
     volatile gpio_ctrl_t *gpio = (volatile gpio_ctrl_t *)pvParameters;
 
     printf("\r[RTOS] Temperature Control Suspended.\n");
-    vTaskSuspend(NULL);
-    LOG_SYS_INFO("Temperature Control Awaken.");
+    vTaskSuspend(nullptr);
+    LOG_SIM_INFO("Temperature Control Awaken.");
 
     // Set log levels for simulation and gpio
     log_set_level(DOMAIN_SYS, ENTITY_SIM, LOG_LEVEL_INFO);
@@ -858,75 +818,20 @@ void vGPIOControlTask(void *pvParameters)
     vTaskDelete(nullptr);
 }
 
-int main(void)
+#else // !SIM
+
+int create_sim_tasks(void)
 {
-    alignas(8) static volatile gpio_ctrl_t gpio; // Local instance of GPIO registers -
-                                                 // simulated memory-mapped hardware
-#ifdef BARE_METAL
-    if (init_port_globals)
-        init_port_globals();
-    init_timestamp();
-    init_uart();
-    init_watchdog();
-#ifdef ENABLE_PCI
-    init_pci();
-#endif
-#endif                    // end of BARE_METAL
-    get_timestamp48();    // start time
-    gpio_set_regs(&gpio); // Set the base address for the GPIO driver
-#ifndef BARE_METAL
-    // Create the binary semaphore for interrupt synchronization
-    init_mock_interrupts();
-#endif
-    // Create the CLI Task
-    xCliHandle = xTaskCreateStatic(
-        vCLITask, "CLITask", CLI_STACK_SIZE, nullptr,
-        tskIDLE_PRIORITY + 1, // Low priority
-        cliStack, &cliTcb
-    );
-    if (xCliHandle == nullptr) {
-        printf("\r[RTOS] Failed to create CLI task\n");
-        return -1;
-    }
-
-    // Create GPIO Controller Task (Priority: Medium)
-    xCtrlHandle = xTaskCreateStatic(
-        vGPIOControlTask, "GpioCtrlTask", CTRL_STACK_SIZE, (void *)&gpio,
-        tskIDLE_PRIORITY + 2, // Higher than CLI but lower than HwSimTask
-        ctrlStack, &ctrlTcb
-    );
-    if (xCtrlHandle == nullptr) {
-        printf("\r[RTOS] Failed to create GPIO Controller task\n");
-        return -1;
-    }
-    // Create Hardware Simulator Task (Priority: High)
-    xHwHandle = xTaskCreateStatic(
-        vHardwareSimTask, "HwSimTask", HW_STACK_SIZE, (void *)&gpio,
-        configMAX_PRIORITIES - 1, // High priority to ensure timely simulation
-        hwStack, &hwTcb
-    );
-    if (xHwHandle == nullptr) {
-        printf("\r[RTOS] Failed to create Hardware Simulator task\n");
-        return -1;
-    }
-#ifndef BARE_METAL
-    sigset_t set;
-    sigemptyset(&set);
-    sigaddset(&set, SIGIO);                  // Unblock SIGIO for interrupt handling
-    sigaddset(&set, SIGTERM);                // Unblock SIGTERM for graceful shutdown
-    sigprocmask(SIG_UNBLOCK, &set, nullptr); // Unblock in main thread (POSIX)
-    // Unblock in all threads (POSIX)
-    pthread_sigmask(SIG_UNBLOCK, &set, nullptr);
-#endif
-    printf("\r[RTOS] Starting Scheduler...\n");
-    /*
-     * Start the scheduler.
-     * In the POSIX port, this will take over the main thread.
-     */
-    vTaskStartScheduler();
-
-    // Should never reach here
-    for (;;)
-        ;
     return 0;
 }
+
+bool sim_pause(void)
+{
+    return true;
+}
+
+void sim_resume(void)
+{
+}
+
+#endif // ENABLE_SIM

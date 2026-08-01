@@ -36,6 +36,7 @@ void cli_log_cmd_init(void);
 void run_cli_tests(EmbeddedCli *cli);
 bool stdin_ready(int timeout_ms);
 
+uint64_t get_timestamp48(void);
 // guard macro substitutions for standard i/o functions
 #undef getchar
 #undef putchar
@@ -79,7 +80,7 @@ cli_data_t cli_data = {
 #define MAP_APP_CONTEXT 0x3
 #define NUM_APP_CONTEXT 4
 #else
-#define CLI_MAX_BINDINGS (12 - 1)
+#define CLI_MAX_BINDINGS (18 - 1)
 #define CLI_MEM_SIZE 1216
 #define MAP_APP_CONTEXT 0x1
 #define NUM_APP_CONTEXT 1
@@ -144,7 +145,13 @@ void on_back(EmbeddedCli *cli, char *args, void *context)
         show_test_select_menu(cli);
     } else
 #endif
-    {
+        if (cli_data.mode == PCI_MODE) {
+        cli_data.mode = SYSTEM;
+        show_main_sys_menu(cli);
+    } else if (cli_data.mode == SIMULATION) {
+        cli_data.mode = SYSTEM;
+        show_main_sys_menu(cli);
+    } else {
         cli_data.mode = MAIN;
         show_main_menu(cli);
     }
@@ -206,14 +213,14 @@ void set_main_commands(EmbeddedCli *cli)
 void show_main_menu(EmbeddedCli *cli)
 {
     cli_clear_menu_region();
+    embeddedCliAddAppContext(cli_data.bindings, NUM_APP_CONTEXT);
     embeddedCliSetAppContext(MAP_APP_CONTEXT);
-    const char *msg = "\nAvailable Modes:\r\n"
+    const char *msg = "\rAvailable Modes:\r\n"
 #ifdef ENABLE_TEST
                       " test - Enter Test Menu\r\n"
 #endif
                       " system - Enter System Menu\r\n"
-                      "\nUsage: <name> (with TAB), 'quit' or 'q' to exit";
-
+                      "Usage: <name> (with TAB), 'quit' or 'q' to exit";
     embeddedCliPrint(cli, msg);
     print_msg(cli);
 }
@@ -365,8 +372,9 @@ void process_logs(void)
 
 void cli_clear_menu_region(void)
 {
-    printf("\033[%d;1H", MENU_REGION_START);
-    printf("\033[J"); // Clear everything from MENU_REGION_START to the bottom
+    printf(TERM_SET_CURSOR_AT_LINE(MENU_REGION_START));
+    // Clear everything from MENU_REGION_START to the bottom
+    printf(TERM_CLEAR_TO_BOTTOM);
     fflush(stdout);
 }
 

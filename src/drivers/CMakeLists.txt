@@ -1,17 +1,26 @@
 set(THIS_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(DRV_INC_DIR ${THIS_DIR}/include)
 set(REGS_INC_DIR ${DRV_INC_DIR}/regs)
-set(LOG_INC_DIRS
-    ${THIS_DIR}/../../common/include
-    ${THIS_DIR}/../../common/include/diagnostic/logging
+set(COMMON_INC_DIR "${CMAKE_SOURCE_DIR}/common/include")
+set(FREERTOS_DIR "${CMAKE_SOURCE_DIR}/third_party/os/freertos")
+set(COMMON_INC_DIRS
+    ${COMMON_INC_DIR}
+    ${COMMON_INC_DIR}/arch
+    ${COMMON_INC_DIR}/lib/libc
+    ${COMMON_INC_DIR}/diagnostic/logging
+)
+set(FREERTOS_DIRS
+    ${FREERTOS_DIR}/include
+    ${FREERTOS_DIR}/portable/GCC/${FREERTOS_PORT} # from the FREERTOS_PORT in port/<arch>/<chip>/CMakeLists.txt
+    ${COMMON_INC_DIR}/os/freertos # freertos config
 )
 set(SOC_GPIO_SOURCES gpio/gpio.c)
-set(SOC_PCI_SOURCES pci/pci_rc.c)
+set(SOC_PCI_SOURCES pci/pci_rc.c pci/pci_utils.c pci/pci_test.c)
 set(SOC_SYSCTRL_SOURCES sysctrl/sysctrl.c)
 set(SOC_TIMER_SOURCES timer/timer.c)
 set(SOC_UART_SOURCES uart/uart.c)
 
-if("$CACHE{TARGET_CHIP}" STREQUAL "cortex-a9-virt")
+if("$CACHE{TARGET_CHIP}" STREQUAL "x86-virt")
     set(DRIVERS ENABLE_GPIO ENABLE_PCI)
 else()
     set(DRIVERS ENABLE_GPIO ENABLE_SYSCTRL ENABLE_TIMER ENABLE_UART)
@@ -30,8 +39,14 @@ if(ENABLE_GPIO)
 endif()
 
 if(ENABLE_PCI)
-    list(APPEND SOC_SOURCES ${SOC_PCI_SOURCES})
-    set_source_files_properties(${SOC_PCI_SOURCES} PROPERTIES COMPILE_DEFINITIONS ENABLE_PCI)
+    if(BARE_METAL)
+        list(APPEND SOC_SOURCES ${SOC_PCI_SOURCES})
+        set_source_files_properties(${SOC_PCI_SOURCES} PROPERTIES COMPILE_DEFINITIONS ENABLE_PCI)
+    endif()
+endif()
+if(RTOS)
+    set_property(SOURCE pci/pci_test.c APPEND PROPERTY COMPILE_DEFINITIONS ENABLE_RTOS "${ENABLE_TARGET_CHIP}")
+    set_source_files_properties(pci/pci_test.c PROPERTIES INCLUDE_DIRECTORIES "${FREERTOS_DIRS}")
 endif()
 
 if(ENABLE_SYSCTRL)
@@ -53,7 +68,10 @@ add_library(soc_drivers STATIC ${SOC_SOURCES})
 add_dependencies(soc_drivers generated_regs)
 target_include_directories(soc_drivers PRIVATE
     ${DRV_INC_DIR}
-    ${LOG_INC_DIRS}
+    ${COMMON_INC_DIRS}
     ${REGS_INC_DIR}
 )
+if(BARE_METAL)
+    target_compile_definitions(soc_drivers PRIVATE BARE_METAL)
+endif()
 target_compile_options(soc_drivers PRIVATE -fno-builtin-printf -fno-builtin-puts -Wall -Wextra -O3)

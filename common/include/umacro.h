@@ -23,6 +23,7 @@
 
 #define COUNT_ARGS(_1, _2, _3, _4, _5, _6, _7, _8, N, ...) N
 #define GET_COUNT(...) COUNT_ARGS(__VA_ARGS__, 8, 7, 6, 5, 4, 3, 2, 1)
-#define LIST_DISPATCH(count, M, P, ...) LIST_##count(M, P, __VA_ARGS__)
+#define LIST_CONCAT(prefix, count) prefix##count
+#define LIST_DISPATCH(count, M, P, ...) LIST_CONCAT(LIST_, count)(M, P, __VA_ARGS__)
 #define LIST_INNER(M, P, ...) LIST_DISPATCH(GET_COUNT(__VA_ARGS__), M, P, __VA_ARGS__)
 #define CREATE_LIST(M, P, N) LIST_INNER(M, P, GET_SEQUENCE(N))

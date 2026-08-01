@@ -15,5 +15,6 @@
 #define EVT_MSI_5 BIT(7)
 #define EVT_MSI_6 BIT(8)
 #define EVT_MSI_7 BIT(9)
+#define EVT_PCI_TEST BIT(10)
 
 extern volatile EVT_BITMAP event_notify;

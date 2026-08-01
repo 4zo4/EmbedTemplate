@@ -1,27 +1,32 @@
-set(THIS_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(COMMON_INC_DIR "${CMAKE_SOURCE_DIR}/common/include")
 set(DRIVERS_INC_DIR "${CMAKE_SOURCE_DIR}/src/drivers/include")
 set(FREERTOS_DIR "${CMAKE_SOURCE_DIR}/third_party/os/freertos")
-set(FREERTOS_PORT_DIR "")
-set(EMBEDDED_CLI_LIB "")
-set(RTOS_LIBS "")
-set(TESTS_LIBS "")
+
+set(STARTUP_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/init_hw.c)
 
 if(BARE_METAL)
-    set(STARTUP_SOURCES ${TARGET_CHIP_SOURCES})
-    if(RTOS)
-        list(APPEND STARTUP_SOURCES ${THIS_DIR}/freertos_sim_main.c)
-        list(APPEND RTOS_LIBS freertos_lib)
+    list(APPEND STARTUP_SOURCES ${TARGET_CHIP_SOURCES})
+endif()
+
+if(RTOS)
+    list(APPEND STARTUP_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/freertos_main.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/freertos_pci.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/freertos_sim.c
+    )
+    if(BARE_METAL)
+        # The path to the FreeRTOS port sources is defined by the FREERTOS_PORT variable in port/<arch>/<chip>/CMakeLists.txt
+        set(FREERTOS_PORT_DIR "${FREERTOS_DIR}/portable/GCC/${FREERTOS_PORT}")
+        set(RTOS_LIBS freertos_lib)
     else()
-        list(APPEND STARTUP_SOURCES ${THIS_DIR}/posix_main.c)
+        set(FREERTOS_PORT_DIR "${FREERTOS_DIR}/portable/ThirdParty/GCC/Posix")
+        set(RTOS_LIBS freertos_lib pthread rt)
     endif()
 else()
-    if(RTOS)
-        set(STARTUP_SOURCES ${THIS_DIR}/freertos_sim_main.c)
-        list(APPEND RTOS_LIBS freertos_lib pthread rt)
-    else()
-        set(STARTUP_SOURCES ${THIS_DIR}/posix_main.c)
-    endif()
+    list(APPEND STARTUP_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/event_loop_main.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/event_loop_test.c
+    )
 endif()
 
 function(add_post_build_bin_extraction TARGET_NAME)
@@ -42,77 +47,57 @@ add_post_build_bin_extraction(runner)
 
 if(BARE_METAL)
     set_target_properties(runner PROPERTIES SUFFIX ".elf")
-endif()
-
-if(BARE_METAL)
     target_compile_definitions(runner PRIVATE BARE_METAL)
+    if(ENABLE_PCI)
+        target_compile_definitions(runner PRIVATE ENABLE_PCI)
+    endif()
 endif()
 
 if(RTOS)
     target_compile_definitions(runner PRIVATE ENABLE_RTOS)
 endif()
-
 if(ENABLE_TARGET_CHIP)
     target_compile_definitions(runner PRIVATE "${ENABLE_TARGET_CHIP}")
 endif()
-
-if(ENABLE_PCI)
-    target_compile_definitions(runner PRIVATE ENABLE_PCI)
+if(ENABLE_SIM)
+    target_compile_definitions(runner PRIVATE ENABLE_SIM)
 endif()
-
-if(RTOS)
-    if(BARE_METAL)
-        # The path to the FreeRTOS port sources is defined by the FREERTOS_PORT variable in port/<arch>/<chip>/CMakeLists.txt
-        set(FREERTOS_PORT_DIR "${FREERTOS_DIR}/portable/GCC/${FREERTOS_PORT}")
-        list(APPEND RTOS_LIBS freertos_lib)
-    else()
-        set(FREERTOS_PORT_DIR "${FREERTOS_DIR}/portable/ThirdParty/GCC/Posix")
-        list(APPEND RTOS_LIBS freertos_lib pthread rt)
-    endif()
-endif()
-
 if(TEST)
-    # From src/testhub src/drivers/<block name>/tests common/src/<name>/tests
-    list(APPEND TESTS_LIBS soc_tests sys_tests)
+    # From src/testhub, src/drivers/<block name>/tests, common/src/<name>/tests
+    set(TESTS_LIBS soc_tests sys_tests)
 endif()
-
 if(CLI)
-    list(APPEND EMBEDDED_CLI_LIB embedded_cli_lib)
+    set(EMBEDDED_CLI_LIB embedded_cli_lib)
 endif()
 
 # Link the SDK components
 target_link_libraries(runner PRIVATE
     cli_lib
     infra_lib
-    soc_drivers    # From src/drivers
     ${RTOS_LIBS}
     ${TESTS_LIBS}
     ${TARGET_CHIP_LIB} # From port/<arch>/<chip>/CMakeLists.txt
+    soc_drivers    # From src/drivers
     ${EMBEDDED_CLI_LIB}
     tfa_libc_lib   # TF-A libc
     ${EXTRA_LIBS}
 )
 
-set(TARGET_INC_DIRS
+target_include_directories(runner PRIVATE
     # FreeRTOS
     ${FREERTOS_DIR}/include
     ${FREERTOS_PORT_DIR}
     ${COMMON_INC_DIR}/os/freertos # freertos config
-
     # Common / Arch
     ${COMMON_INC_DIR}
     ${COMMON_INC_DIR}/arch
     ${COMMON_INC_DIR}/diagnostic/logging
-
     # Drivers / Hardware
     ${DRIVERS_INC_DIR}
     ${DRIVERS_INC_DIR}/regs
+    # TF-A libc
+    $<$<BOOL:${BARE_METAL}>:${COMMON_INC_DIR}/lib/libc>
 )
 
-if(BARE_METAL)
-    list(APPEND TARGET_INC_DIRS ${COMMON_INC_DIR}/lib/libc)
-endif()
-
-target_include_directories(runner PRIVATE ${TARGET_INC_DIRS})
 target_compile_options(runner PRIVATE -fno-builtin-printf -fno-builtin-puts -Wall -Wextra -O3)
 target_link_options(runner PRIVATE "-Wl,-Map=runner.map")

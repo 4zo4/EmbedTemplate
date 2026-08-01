@@ -31,6 +31,7 @@
     static inline void enable_interrupts(void) {
         __asm volatile("cpsie i" : : : "memory");
     }
+    static inline void io_barrier(void) { __asm__ volatile("dsb sy" : : : "memory"); }
     #define memory_barrier() __asm volatile("dmb sy" : : : "memory") /* Data Memory Barrier */
     #define data_sync_barrier() __asm volatile("dsb sy" : : : "memory") /* Data Synchronization Barrier */
     #define ins_sync_barrier() __asm volatile("isb sy" : : : "memory") /* Instruction Synchronization Barrier */
@@ -48,6 +49,7 @@
     static inline void enable_interrupts(void) {
         __asm volatile("msr daifclr, #2" : : : "memory");
     }
+    static inline void io_barrier(void) { __asm__ volatile("dsb sy" : : : "memory"); }
     #define memory_barrier() __asm volatile("dmb sy" : : : "memory")
     #define data_sync_barrier() __asm volatile("dsb sy" : : : "memory")
     #define ins_sync_barrier() __asm volatile("isb" : : : "memory")
@@ -64,6 +66,7 @@
     static inline void enable_interrupts(void) {
         __asm volatile ("cpsie i" : : : "memory");
     }
+    static inline void io_barrier(void) { __asm__ volatile("" : : : "memory"); }
     #define memory_barrier() __asm volatile("" : : : "memory")
     #define data_sync_barrier() __asm volatile("" : : : "memory")
     #define ins_sync_barrier() __asm volatile("" : : : "memory")
@@ -85,6 +88,7 @@
     static inline void enable_interrupts(void) {
         __asm volatile ("csrsi mstatus, 8" : : : "memory");
     }
+    static inline void io_barrier(void) { __asm__ volatile("fence io, io" : : : "memory"); }
     #define memory_barrier() __asm volatile("fence iorw, iorw" : : : "memory")
     #define data_sync_barrier() __asm volatile("fence iorw, iorw" : : : "memory")
     #define ins_sync_barrier() __asm volatile("fence.i" : : : "memory")
@@ -92,26 +96,32 @@
     #ifdef BARE_METAL
     #define NOP() __asm__ volatile("nop")
     #define HALT_CPU() __asm__ volatile("hlt")
+    #ifdef __x86_64__
+    #define INCODE
+    #else // 32-bit x86
+    #define INCODE ".code32\n\t"
+    #endif
     static inline uint32_t disable_interrupts(void) {
-        uint64_t primask;
         #ifdef __x86_64__
+            uint64_t primask;
             __asm__ volatile ("pushfq ; pop %0 ; cli" : "=r" (primask) : : "memory");
         #else // 32-bit x86
-            __asm__ volatile ("pushfd ; pop %0 ; cli" : "=r" (primask) : : "memory");
+            uint32_t primask;
+            __asm__ volatile (INCODE"pushfl; popl %0 ; cli" : "=r" (primask) : : "memory");
         #endif
         return (uint32_t)primask;
     }
     static inline void restore_interrupts(uint32_t primask) {
         if (primask & (1 << 9)) {
-            __asm__ volatile ("sti" : : : "memory");
+            __asm__ volatile (INCODE"sti" : : : "memory");
         }
     }
     static inline void enable_interrupts(void) {
-        __asm__ volatile ("sti" : : : "memory");
+        __asm__ volatile (INCODE"sti" : : : "memory");
     }
-    #define memory_barrier() __asm volatile("mfence" : : : "memory")
-    #define data_sync_barrier() __asm volatile("sfence" : : : "memory")
-    #define ins_sync_barrier() __asm volatile("cpuid" : : : "ax","bx","cx","dx","memory")
+    #define memory_barrier() __asm volatile(INCODE"mfence" : : : "memory")
+    #define data_sync_barrier() __asm volatile(INCODE"sfence" : : : "memory")
+    #define ins_sync_barrier() __asm__ volatile(INCODE"lfence" : : : "memory")
     #else // !BARE_METAL
     #define NOP() do {} while(0)
     #define HALT_CPU() for(;;)
@@ -122,12 +132,14 @@
     #define data_sync_barrier() NOP()
     #define ins_sync_barrier() NOP()
     #endif
+    static inline void io_barrier(void) { __asm__ volatile("" : : : "memory"); }
 #else // unsupported architecture
     #define NOP() do {} while(0)
     #define HALT_CPU() for(;;)
     static inline uint32_t disable_interrupts(void) { return 0; }
     static inline void restore_interrupts(uint32_t primask) { (void)primask; }
     static inline void enable_interrupts(void) {}
+    #define io_barrier() NOP()
     #define memory_barrier() NOP()
     #define data_sync_barrier() NOP()
     #define ins_sync_barrier() NOP()

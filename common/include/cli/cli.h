@@ -16,6 +16,8 @@
 typedef enum {
     NONE = 0,
     MAIN,
+    PCI_MODE,
+    SIMULATION,
     SYSTEM,
     TEST,
     TEST_DEV,

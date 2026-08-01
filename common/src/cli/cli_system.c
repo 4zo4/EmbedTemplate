@@ -13,6 +13,7 @@
 #include "block_id.h"
 #include "cli.h"
 #include "embedded_cli.h"
+#include "event.h"
 #include "log.h"
 #include "log_marker.h"
 #include "pack.h"
@@ -22,6 +23,9 @@
 void clear_msg(void);
 void set_msg(const char *msg);
 void print_msg(EmbeddedCli *cli);
+void pci_start(void);
+void pci_suspend(void);
+void pci_test_start(void);
 void sim_start(void);
 void sim_suspend(void);
 bool sim_pause(void);
@@ -128,6 +132,23 @@ static const uint16_t dom_map_en = (MAP_ALL_DOMAINS & ~(1U << DOMAIN_TEST));
 const char *error = "[ERROR] Too many arguments";
 const char *invalid = "[ERROR] Invalid selection";
 
+#ifdef ENABLE_PCI
+#ifdef ENABLE_RTOS
+#define NUM_PCI_APP_CONTEXT 3
+#define MAP_PCI_APP_CONTEXT 0x7
+#else
+#define NUM_PCI_APP_CONTEXT 1
+#define MAP_PCI_APP_CONTEXT 0x1
+#endif
+static uint8_t pci_ctx[8]; // pci application context binding ids
+#endif
+
+#if defined(ENABLE_RTOS) && defined(ENABLE_SIM)
+#define NUM_SIM_APP_CONTEXT 4
+#define MAP_SIM_APP_CONTEXT 0xF
+static uint8_t sim_ctx[8]; // simulation application context binding ids
+#endif
+
 // -- End of globals --
 
 void show_main_sys_menu(EmbeddedCli *cli)
@@ -136,19 +157,58 @@ void show_main_sys_menu(EmbeddedCli *cli)
     embeddedCliSetAppContext(0x0);
     // clang-format off
     const char *msg =
-        "\nSystem Commands:\r\n"
+        "\rSystem Commands:\r\n"
         " set - Set log level\r\n"
         " show - Show status\r\n"
-#ifdef ENABLE_RTOS
-        " start - Start HW Simulation\r\n"
-        " end - End HW Simulation\r\n"
-        " pause - Pause HW Simulation\r\n"
-        " resume - Resume HW Simulation\r\n"
+#if defined(ENABLE_RTOS) && defined(ENABLE_SIM)
+        " sim - HW Simulation Control\r\n"
 #endif
-        "\nUsage: <name> (with TAB), 'quit' or 'q' to exit, 'back' to previous menu";
+#if defined(BARE_METAL) && defined(ENABLE_PCI)
+        " pci - PCI Control\r\n"
+#endif
+        "Usage: <name> (with TAB), 'quit' or 'q' to exit, 'back' to previous menu";
     // clang-format on
     embeddedCliPrint(cli, msg);
 }
+
+void show_sim_menu(EmbeddedCli *cli)
+{
+#if defined(ENABLE_RTOS) && defined(ENABLE_SIM)
+    cli_clear_menu_region();
+    embeddedCliAddAppContext(sim_ctx, NUM_SIM_APP_CONTEXT);
+    embeddedCliSetAppContext(MAP_SIM_APP_CONTEXT);
+    // clang-format off
+    const char *msg =
+        "\rSimulation Control Commands:\r\n"
+        " start - Start HW Simulation\r\n"
+        " stop - Stop HW Simulation\r\n"
+        " pause - Pause HW Simulation\r\n"
+        " resume - Resume HW Simulation\r\n"
+        "Usage: <name> (with TAB), 'quit' or 'q' to exit, 'back' to previous menu";
+    // clang-format on
+    embeddedCliPrint(cli, msg);
+#endif
+}
+
+#ifdef ENABLE_PCI
+void show_pci_menu(EmbeddedCli *cli)
+{
+    cli_clear_menu_region();
+    embeddedCliAddAppContext(pci_ctx, NUM_PCI_APP_CONTEXT);
+    embeddedCliSetAppContext(MAP_PCI_APP_CONTEXT);
+    // clang-format off
+    const char *msg =
+        "\rPCI Control Commands:\r\n"
+#ifdef ENABLE_RTOS
+        " start - Start PCI Control\r\n"
+        " stop - Stop PCI Control\r\n"
+#endif
+        " test - PCI test\r\n"
+        "Usage: <name> (with TAB), 'quit' or 'q' to exit, 'back' to previous menu";
+    // clang-format on
+    embeddedCliPrint(cli, msg);
+}
+#endif // ENABLE_PCI
 
 void on_system_menu(EmbeddedCli *cli, char *args, void *context)
 {
@@ -161,18 +221,31 @@ void on_system_menu(EmbeddedCli *cli, char *args, void *context)
     show_main_sys_menu(cli);
 }
 
+void on_sim_menu(EmbeddedCli *cli, char *args, void *context)
+{
+#ifdef ENABLE_SIM
+    (void)args;
+    (void)context;
+    clear_msg();
+    cli_data.mode = SIMULATION;
+    cli_data.test = MAX_BLOCK_INDEX;
+    cli_data.flags.write_enable = true;
+    show_sim_menu(cli);
+#endif
+}
+
 void on_start_hw_sim(EmbeddedCli *cli, char *args, void *context)
 {
-#ifdef ENABLE_RTOS
+#if defined(ENABLE_RTOS) && defined(ENABLE_SIM)
     cmd_in_test_mode(cli);
     // Start hardware simulation
     sim_start();
 #endif
 }
 
-void on_end_hw_sim(EmbeddedCli *cli, char *args, void *context)
+void on_stop_hw_sim(EmbeddedCli *cli, char *args, void *context)
 {
-#ifdef ENABLE_RTOS
+#if defined(ENABLE_RTOS) && defined(ENABLE_SIM)
     cmd_in_test_mode(cli);
     // Suspend hardware simulation
     sim_suspend();
@@ -181,7 +254,7 @@ void on_end_hw_sim(EmbeddedCli *cli, char *args, void *context)
 
 void on_pause(EmbeddedCli *cli, char *args, void *context)
 {
-#ifdef ENABLE_RTOS
+#if defined(ENABLE_RTOS) && defined(ENABLE_SIM)
     cmd_in_test_mode(cli);
     // Pause hardware simulation
     sim_pause();
@@ -190,10 +263,47 @@ void on_pause(EmbeddedCli *cli, char *args, void *context)
 
 void on_resume(EmbeddedCli *cli, char *args, void *context)
 {
-#ifdef ENABLE_RTOS
+#if defined(ENABLE_RTOS) && defined(ENABLE_SIM)
     cmd_in_test_mode(cli);
     // Resume hardware simulation
     sim_resume();
+#endif
+}
+
+#if defined(ENABLE_RTOS) && defined(ENABLE_PCI)
+void pci_start_wrap(EmbeddedCli *cli, char *args, void *context)
+{
+    pci_start();
+}
+#endif
+
+void on_start_pci(EmbeddedCli *cli, char *args, void *context)
+{
+#if defined(BARE_METAL) && defined(ENABLE_PCI)
+    (void)args;
+    (void)context;
+    clear_msg();
+    cli_data.mode = PCI_MODE;
+    cli_data.test = MAX_BLOCK_INDEX;
+    cli_data.flags.write_enable = true;
+    show_pci_menu(cli);
+#ifdef ENABLE_RTOS
+    pci_start();
+#endif
+#endif // ENABLE_PCI
+}
+
+void on_pci_test(EmbeddedCli *cli, char *args, void *context)
+{
+#if defined(BARE_METAL) && defined(ENABLE_PCI)
+    pci_test_start();
+#endif
+}
+
+void on_stop_pci(EmbeddedCli *cli, char *args, void *context)
+{
+#if defined(ENABLE_RTOS) && defined(BARE_METAL) && defined(ENABLE_PCI)
+    pci_suspend();
 #endif
 }
 
@@ -232,6 +342,7 @@ void show_config(EmbeddedCli *cli, char *args, int count)
 
 void show_config_sim(EmbeddedCli *cli, char *args, int count)
 {
+#if defined(ENABLE_RTOS) && defined(ENABLE_SIM)
     const char *opt = embeddedCliGetToken(args, 3);
     int         what = 0; // 'current'
 
@@ -297,6 +408,7 @@ void show_config_sim(EmbeddedCli *cli, char *args, int count)
         msg[n] = '\0';
         embeddedCliPrint(cli, msg);
     }
+#endif
 }
 
 void show_config_short(EmbeddedCli *cli, char *args, int count)
@@ -567,7 +679,7 @@ static const char *single[] = {nullptr};
  *      hints (e.g., <ramp>, <mass>) to guide numeric input.
  *    - Standard Completion: TAB simply provides the next sub-verb.
  */
-#ifdef ENABLE_RTOS
+#if defined(ENABLE_RTOS) && defined(ENABLE_SIM)
 static const char  *set_cmd_compo_1[] = {"log", "sim", nullptr};    // Level 1: Sub-commands
 static const char  *set_cmd_compo_1_1[] = {"", nullptr};            // Level 2: 'log' (handled by spec_idx 1)
 static const char  *set_cmd_compo_1_2[] = {"phy", "temp", nullptr}; // Level 2: 'sim' options 'set sim phy' | 'set sim temp'
@@ -595,7 +707,7 @@ static const char *set_cmd_sim_temp_args[] = {"latency", "target", "critical", "
 // These act as POSITIONAL HINTS because spec_idx is non-zero.
 static const comp_opt_t set_cmd_options[] = {
     {SET_LOG,     set_cmd_log_args     }, // 'set log'
-#ifdef ENABLE_RTOS
+#if defined(ENABLE_RTOS) && defined(ENABLE_SIM)
     {SET_SIM,     set_cmd_sim_phy_args }, // 'set sim phy'
     {SET_SIM + 1, set_cmd_sim_temp_args}, // 'set sim temp'
 #endif
@@ -616,7 +728,7 @@ void on_set_sim_command(EmbeddedCli *cli, char *args, int count);
 static void (*set_cmd_action[])(EmbeddedCli *cli, char *args, int count) = {
     nullptr,            // [0] Reserved
     on_set_log_command, // [1] sel log <pos args>
-#ifdef ENABLE_RTOS
+#if defined(ENABLE_RTOS) && defined(ENABLE_SIM)
     on_set_sim_command, // [2] set sim [options]
 #endif
 };
@@ -644,7 +756,7 @@ static const cmd_comp_desc_t set_cmd_desc = {
  */
 static const char *show_cmd_compo_1[] = {"stats", "config", "version", "domains", "entities", "levels", nullptr};
 static const char *show_cmd_compo_1_1[] = {"log", "sys", "task", nullptr}; // 'show stats ...'
-#ifdef ENABLE_RTOS
+#if defined(ENABLE_RTOS) && defined(ENABLE_SIM)
 static const char *show_cmd_compo_1_2[] = {"", "short", "sim", "log", nullptr}; // 'show config ...'
 #else
 static const char *show_cmd_compo_1_2[] = {"", "short", "log", nullptr}; // 'show config ...'
@@ -670,7 +782,7 @@ static const char **show_cmd_compos[] = {
  * Matches 1D action index to a list of optional terminal arguments.
  */
 static const char *options_stats_log[] = {"clear", nullptr};
-#ifdef ENABLE_RTOS
+#if defined(ENABLE_RTOS) && defined(ENABLE_SIM)
 static const char *options_config_sim[] = {"current", "default", "ranges", nullptr};
 static comp_opt_t  show_cmd_options[] = {
     {SHOW_STATS,      options_stats_log }, // Maps to 'show stats log [clear]'
@@ -717,7 +829,7 @@ static void (*show_cmd_action[])(EmbeddedCli *cli, char *args, int count) = {
 
     show_config,       // [3] show config (hybrid: leaf + path)
     show_config_short, // [4] show config short
-#ifdef ENABLE_RTOS
+#if defined(ENABLE_RTOS) && defined(ENABLE_SIM)
     show_config_sim, // [5] show config sim [current|default|ranges]
 #endif
     show_config_log, // [6] show config log
@@ -1194,6 +1306,7 @@ static void sim_cfg_print_oor(EmbeddedCli *cli, int ret)
 
 void on_set_sim_command(EmbeddedCli *cli, char *args, int count)
 {
+#if defined(ENABLE_RTOS) && defined(ENABLE_SIM)
     const char *arg = embeddedCliGetToken(args, 2); // Guaranteed to be "phy" or "temp"
     bool        temp = (strcmp(arg, "temp") == 0);
     int         ret = 0;
@@ -1259,6 +1372,7 @@ void on_set_sim_command(EmbeddedCli *cli, char *args, int count)
         sim_cfg_print_oor(cli, ret);
     if ((cfg_mask & ~(uint16_t)ret) != 0)
         embeddedCliPrint(cli, "Sim config set");
+#endif
 }
 
 void cli_log_cmd_init(void)
@@ -1339,6 +1453,7 @@ void on_show_command(EmbeddedCli *cli, char *args, void *context)
 
 void set_system_commands(EmbeddedCli *cli)
 {
+    uint16_t bid;
     embeddedCliAddBinding(
         cli,
         (CliCommandBinding){
@@ -1357,38 +1472,89 @@ void set_system_commands(EmbeddedCli *cli)
         }
     );
     embeddedCliAddCompletion("set", set_cmd_completion);
-#ifdef ENABLE_RTOS
+#if defined(ENABLE_RTOS) && defined(ENABLE_SIM)
     embeddedCliAddBinding(
+        cli,
+        (CliCommandBinding){
+            .name = "sim",
+            .flags = BINDING_FLAG_WIDE,
+            .binding = on_sim_menu, // on simulation menu
+        }
+    );
+    bid = embeddedCliAddBinding(
         cli,
         (CliCommandBinding){
             .name = "start",
-            .flags = BINDING_FLAG_WIDE,
+            .flags = BINDING_FLAG_HIDDEN | BINDING_FLAG_APP_CONTEXT,
             .binding = on_start_hw_sim, // on starting HW simulation
         }
     );
-    embeddedCliAddBinding(
+    sim_ctx[0] = bid;
+    bid = embeddedCliAddBinding(
         cli,
         (CliCommandBinding){
-            .name = "end",
-            .flags = BINDING_FLAG_WIDE,
-            .binding = on_end_hw_sim, // on ending HW simulation
+            .name = "stop",
+            .flags = BINDING_FLAG_HIDDEN | BINDING_FLAG_APP_CONTEXT,
+            .binding = on_stop_hw_sim, // on stoping HW simulation
         }
     );
-    embeddedCliAddBinding(
+    sim_ctx[1] = bid;
+    bid = embeddedCliAddBinding(
         cli,
         (CliCommandBinding){
             .name = "pause",
-            .flags = BINDING_FLAG_WIDE,
-            .binding = on_pause, // on pausing
+            .flags = BINDING_FLAG_HIDDEN,
+            .binding = on_pause, // on pausing HW simulation
         }
     );
-    embeddedCliAddBinding(
+    sim_ctx[2] = bid;
+    bid = embeddedCliAddBinding(
         cli,
         (CliCommandBinding){
             .name = "resume",
-            .flags = BINDING_FLAG_WIDE,
-            .binding = on_resume, // on resuming
+            .flags = BINDING_FLAG_HIDDEN,
+            .binding = on_resume, // on resuming HW simulation
         }
     );
-#endif
+    sim_ctx[3] = bid;
+#endif // ENABLE_SIM
+#if defined(ENABLE_RTOS) && defined(ENABLE_PCI)
+    bid = embeddedCliAddBinding(
+        cli,
+        (CliCommandBinding){
+            .name = "start",
+            .flags = BINDING_FLAG_HIDDEN | BINDING_FLAG_APP_CONTEXT,
+            .binding = pci_start_wrap, // start pci
+        }
+    );
+    pci_ctx[1] = bid;
+    bid = embeddedCliAddBinding(
+        cli,
+        (CliCommandBinding){
+            .name = "stop",
+            .flags = BINDING_FLAG_HIDDEN | BINDING_FLAG_APP_CONTEXT,
+            .binding = on_stop_pci, // stop pci control
+        }
+    );
+    pci_ctx[2] = bid;
+#endif // ENABLE_PCI
+#if defined(BARE_METAL) && defined(ENABLE_PCI)
+    embeddedCliAddBinding(
+        cli,
+        (CliCommandBinding){
+            .name = "pci",
+            .flags = BINDING_FLAG_WIDE,
+            .binding = on_start_pci, // start pci control
+        }
+    );
+    bid = embeddedCliAddBinding(
+        cli,
+        (CliCommandBinding){
+            .name = "test", // command name 'test' appears in other application context
+            .flags = BINDING_FLAG_HIDDEN | BINDING_FLAG_APP_CONTEXT,
+            .binding = on_pci_test, // start pci test
+        }
+    );
+    pci_ctx[0] = bid;
+#endif // ENABLE_PCI
 }

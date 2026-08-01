@@ -59,7 +59,8 @@ bool stdin_ready(int timeout_ms)
 
 #ifdef ENABLE_RTOS
 extern volatile uint32_t ulPortInterruptNesting;
-static inline bool       xPortIsInsideInterrupt(void)
+
+static inline bool xPortIsInsideInterrupt(void)
 {
     return (ulPortInterruptNesting > 0);
 }
@@ -80,7 +81,7 @@ void signal_data_ready(void)
         xTaskNotifyGive(xCliHandle);
     }
 #else
-    event_notify |= BIT(1);
+    event_notify |= EVT_DATA_READY;
 #endif
 }
 
