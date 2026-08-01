@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <stdalign.h>
 #include <stdlib.h>
 #include <string.h>
@@ -617,16 +618,40 @@ void embeddedCliProcess(EmbeddedCli *cli) {
 
 uint16_t embeddedCliAddBinding(EmbeddedCli *cli, CliCommandBinding binding) {
     PREPARE_IMPL(cli);
-    if (impl->bindingsCount == (impl->maxBindingsCount - CLI_INTERNAL_BINDING_COUNT))
+    if (impl->bindingsCount >= (impl->maxBindingsCount - CLI_INTERNAL_BINDING_COUNT))
         return BINDING_INVALID;
 
     int bindingsCount = impl->bindingsCount;
-    impl->bindings[bindingsCount] = binding;
-
-    if (IS_FLAG_SET(binding.flags, BINDING_FLAG_WIDE) &&
-        wideBindingsCount < MAX_WIDE_BINDINGS) {
+    if (IS_FLAG_SET(binding.flags, BINDING_FLAG_APP_CONTEXT)) {
+        assert((binding.context == NULL) && "[ERROR] context ptr must be unused here.");
+        CliCommandBinding *duplicate = NULL;
+        for (int i = 0; i < bindingsCount; i++) {
+            if (strcmp(impl->bindings[i].name, binding.name) == 0) {
+                duplicate = &impl->bindings[i];
+                break;
+            }
+        }
+        if (duplicate) {
+            int wideCount = 0;
+            while (duplicate->context != NULL) {
+                if (IS_FLAG_SET(duplicate->flags, BINDING_FLAG_WIDE))
+                    wideCount++;
+                duplicate = (CliCommandBinding *)duplicate->context;
+            }
+            assert((wideCount < 2) && "[ERROR] A single wide command name is allowed.");
+            duplicate->context = &impl->bindings[bindingsCount];
+        }
+        assert((bindingsCount <= MAX_APP_CONTEXT_BINDING_INDEX) &&
+                "[ERROR] Exceed binding index for type size. Please arrange the binding in 1 - 255 range.");
+    }
+    if (IS_FLAG_SET(binding.flags, BINDING_FLAG_WIDE)) {
+        assert((wideBindingsCount < MAX_WIDE_BINDINGS) &&
+                "[ERROR] Insufficient wide bindings. Please extend MAX_WIDE_BINDINGS size.");
+        assert((bindingsCount <= MAX_WIDE_BINDING_INDEX) &&
+                "[ERROR] Exceed binding index for type size. Please arrange the binding in 1 - 255 range.");
         wideBindingsIdx[wideBindingsCount++] = bindingsCount;
     }
+    impl->bindings[bindingsCount] = binding;
     registerBindingIndex(impl->bindings[bindingsCount].name, bindingsCount);
     ++impl->bindingsCount;
     return bindingsCount;
@@ -1079,7 +1104,7 @@ static void onUnknownCommand(EmbeddedCli *cli, const char *name) {
     writeToOutput(cli, lineBreak);
 }
 
-static inline const char *getNameFromBindings(CliCommandBinding *bindings, int i) {
+static inline const char *getNameFromBindings(const CliCommandBinding *bindings, int i) {
     return bindings[i].name;
 }
 
@@ -1134,6 +1159,7 @@ static int getAutocompletedCommand(EmbeddedCli *cli, const char **matches, const
     const uint8_t *bindingIdx;
     uint16_t map = 0;
 
+    // traverse both application context and wide binding lists
     for (int n = 0; n < 2; n++) {
         if (n == 0) {
             maxcount = ctx->count;
@@ -1150,8 +1176,20 @@ static int getAutocompletedCommand(EmbeddedCli *cli, const char **matches, const
             name = getNameFromBindings(impl->bindings, bindingIdx[i]);
             if (strncmp(name, prefix, prefixLen) == 0) {
                 if (count < 8) {
-                    matches[count] = name;
-                    count++;
+                    bool duplicate = false;
+                    if (IS_FLAG_SET(impl->bindings[bindingIdx[i]].flags,
+                                    BINDING_FLAG_APP_CONTEXT)) {
+                        for (int d = 0; d < count; d++) {
+                            if (strcmp(name, matches[d]) == 0) {
+                                duplicate = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!duplicate) {
+                        matches[count] = name;
+                        count++;
+                    }
                 } else {
                     break;
                 }
@@ -1578,6 +1616,7 @@ static int findCompletionIndex(const char *cmdName) {
  * @param bindings The library's internal array of command bindings.
  * @return The index of the binding if found; -1 otherwise.
  */
+#define GET_BID_FROM_PTR(ptr, bindings) (uint8_t)(uintptr_t)((ptr) - &bindings[0])
 static int findBindingIndex(const char *cmdName, const CliCommandBinding *bindings) {
     uint32_t hash = cliHash(cmdName);
     uint32_t idx = hash & BINDING_MAP_MASK;
@@ -1590,6 +1629,53 @@ static int findBindingIndex(const char *cmdName, const CliCommandBinding *bindin
         uint32_t actualIdx = (uint32_t)bindingMap[idx];
 
         if (strcmp(cmdName, bindings[actualIdx].name) == 0) {
+            if (IS_FLAG_SET(bindings[actualIdx].flags, BINDING_FLAG_APP_CONTEXT)) {
+                EmbeddedCliContext *ctx = embeddedCliGetAppContext();
+                const uint8_t *bindingIdx = ctx->base;
+                uint16_t map = ~(ctx->stride);
+                uint16_t bid = 0; // matching binding index
+                uint16_t fid = 0; // fallback binding index
+                int maxcount = ctx->count;
+
+                if (IS_FLAG_SET(bindings[actualIdx].flags, BINDING_FLAG_WIDE))
+                    fid = actualIdx; // command is global
+
+                // find is command name on the current application context
+                for (int i = 0; i < maxcount; i++) {
+                    if (map & (1 << i))
+                        continue;
+                    const char *name = getNameFromBindings(bindings, bindingIdx[i]);
+                    if (strcmp(name, bindings[actualIdx].name) == 0) {
+                        bid = bindingIdx[i]; // candidate binding index
+                        break;
+                    }
+                }
+                if (bid) {
+                    if (actualIdx != bid) {
+                        CliCommandBinding *duplicate = bindings[actualIdx].context;
+                        if (duplicate) {
+                            // find is candidate on the match list
+                            while (duplicate != NULL) {
+                                if (IS_FLAG_SET(duplicate->flags, BINDING_FLAG_WIDE))
+                                    fid = GET_BID_FROM_PTR(duplicate, bindings);
+                                if (duplicate == &bindings[bid])
+                                    break; // match
+                                duplicate = (CliCommandBinding *)duplicate->context;
+                            }
+                            if (duplicate == NULL)
+                                bid = 0;
+                        } else {
+                            bid = 0;
+                        }
+                    }
+                }
+                if (bid)
+                    actualIdx = bid;
+                else if (fid)
+                    actualIdx = fid;
+                else
+                    return -1; // no match - should never reach here
+            }
             return (int)actualIdx;
         }
 
@@ -1641,7 +1727,7 @@ bool embeddedCliAddCompletion(const char *name,
     return false; // Should never reach here
 }
 
-static bool compareBindings(const CliCommandBinding *a, const CliCommandBinding *b) {
+static bool inline compareBindings(const CliCommandBinding *a, const CliCommandBinding *b) {
     return (strcmp(a->name, b->name) == 0);
 }
 
@@ -1656,13 +1742,33 @@ int embeddedCliCheckBindingDuplicates(EmbeddedCli *cli) {
     if (bindingsCount < 2)
         return 0;
 
-    for (uint16_t i = 0; i < bindingsCount - 1; i++) {
-        for (uint16_t j = i + 1; j < bindingsCount; j++) {
-            if (compareBindings(&impl->bindings[i], &impl->bindings[j])) {
-                count++;
+    for (uint16_t i = 0; i < bindingsCount; i++) {
+        const CliCommandBinding *binding = &impl->bindings[i];
+        uint32_t hash = cliHash(binding->name);
+        uint32_t idx = hash & BINDING_MAP_MASK;
+
+        for (int probe = 0; probe < 32; probe++) {
+            if (!IS_IN_USE(inuseBindings, idx)) {
+                break;
             }
+
+            uint32_t actualIdx = (uint32_t)bindingMap[idx];
+            const CliCommandBinding *prime = &impl->bindings[actualIdx];
+
+            if (strcmp(prime->name, binding->name) == 0) {
+                if (actualIdx < i) {
+                    if (!(IS_FLAG_SET(prime->flags, BINDING_FLAG_APP_CONTEXT) &&
+                          IS_FLAG_SET(binding->flags, BINDING_FLAG_APP_CONTEXT))) {
+                        count++;
+                    }
+                }
+                break;
+            }
+
+            idx = (idx + 1) & BINDING_MAP_MASK;
         }
     }
+
     return count;
 }
 
@@ -1697,10 +1803,10 @@ void embeddedCliAddAppContext(uint8_t *base, int count)
     cliAppContext.count = count;
 }
 
-EmbeddedCliContext *embeddedCliGetAppContext(void) {
-    return cliAppContext.count ? &cliAppContext : NULL;
-}
-
 void embeddedCliSetAppContext(uint16_t map) {
     cliAppContext.stride = map;
+}
+
+EmbeddedCliContext *embeddedCliGetAppContext(void) {
+    return cliAppContext.count ? &cliAppContext : NULL;
 }

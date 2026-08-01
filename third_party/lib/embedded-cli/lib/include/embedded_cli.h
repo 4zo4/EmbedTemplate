@@ -31,8 +31,10 @@ extern "C" {
 #define BYTES_TO_CLI_UINTS(bytes) \
   (((bytes) + CLI_UINT_SIZE - 1)/CLI_UINT_SIZE)
 
-#define MAX_BINDINGS 76
+#define MAX_BINDINGS 80 // Extend as needed
 #define MAX_ARGS_COMPLETIONS 8
+#define MAX_WIDE_BINDING_INDEX 255 // 1 - 255 range
+#define MAX_APP_CONTEXT_BINDING_INDEX MAX_WIDE_BINDING_INDEX
 
 // history buffer size must be power of two
 #define HISTORY_BUF_SMALL  128
@@ -41,17 +43,18 @@ extern "C" {
 #define HISTORY_BUF_DEFAULT HISTORY_BUF_MEDIUM
 
 #define BINDING_INVALID 0xFFFF
+#define BINDING_RESERVED 0
 #define BINDING_FLAG_HIDDEN (1u << 8) // Exclude from help and autocomplete
 #define BINDING_FLAG_TOKENIZE_ARGS (1u << 9) // Tokenize command arguments before calling binding function
 #define BINDING_FLAG_HAS_HELP (1u << 10) // Command has its help
 #define BINDING_FLAG_DIGIT (1u << 11) // Is binding a digit
 #define BINDING_FLAG_WIDE (1u << 12) // System wide binding
+#define BINDING_FLAG_APP_CONTEXT (1u << 13) // Is binding application context specific
 
 typedef struct CliCommand CliCommand;
 typedef struct CliCommandBinding CliCommandBinding;
 typedef struct EmbeddedCli EmbeddedCli;
 typedef struct EmbeddedCliConfig EmbeddedCliConfig;
-
 
 struct CliCommand {
     /**
@@ -135,7 +138,7 @@ struct EmbeddedCliConfig {
      * input
      */
     const char *invitation;
-    
+
     /**
      * Size of buffer that is used to store characters until they're processed
      */
@@ -308,10 +311,10 @@ uint16_t embeddedCliGetTokenCount(const char *tokenizedStr);
 
 /**
  * @brief Registers a custom argument completion callback for a specific command.
- * 
- * Maps a command name to a handler function that provides sub-command 
+ *
+ * Maps a command name to a handler function that provides sub-command
  * suggestions or help text.
- * 
+ *
  * @param name The name of the command.
  * @param onArgsCompletion Callback called when the user presses
  *   'Tab' for sub-command autocomplete or sub-command '?Tab' for help.
@@ -319,7 +322,7 @@ uint16_t embeddedCliGetTokenCount(const char *tokenizedStr);
  * Arguments of onArgsCompletion:
  * - cli:   Pointer to the CLI instance.
  * - token: This will be string fragment typed when invoked.
- * - pos:   The 1-based index of the argument being completed. 
+ * - pos:   The 1-based index of the argument being completed.
  *          Example: "show stats lo[TAB]" -> token="lo", pos=2.
  * @return true if successfully registered; false if the completion table is full.
  */
@@ -328,7 +331,7 @@ bool embeddedCliAddCompletion(const char *name,
 
 /**
  * Returns the total number of command bindings currently registered.
- * 
+ *
  * @param cli Pointer to the CLI instance.
  * @return The current count of registered command bindings.
  */
@@ -337,7 +340,7 @@ uint16_t embeddedCliGetBindingsCount(EmbeddedCli *cli);
 /**
  * @brief Retrieves the current raw input string from the CLI buffer.
  * Provides access to the text currently being typed by the user.
- * 
+ *
  * @param cli Pointer to the CLI instance.
  * @param input_size Pointer to store the length of the returned string.
  * @return Constant pointer to the internal command buffer.
@@ -346,11 +349,11 @@ const char* embeddedCliGetInputString(EmbeddedCli *cli, uint16_t *input_size);
 
 /**
  * @brief Appends a candidate string to the current CLI input for completion.
- * 
- * This function handles the visual update of the command line, appending 
- * characters from a matching candidate until an ambiguity is reached or 
+ *
+ * This function handles the visual update of the command line, appending
+ * characters from a matching candidate until an ambiguity is reached or
  * the word is completed.
- * 
+ *
  * @param cli Pointer to the CLI instance.
  * @param name The candidate string to be used for completion.
  */
@@ -358,9 +361,9 @@ void embeddedCliCompletion(EmbeddedCli *cli, const char *name);
 
 /**
  * @brief Forces a redraw of the current CLI input line.
- * 
+ *
  * Synchronizes the display with the internal command buffer.
- * 
+ *
  * @param cli Pointer to the CLI instance.
  */
 void embeddedCliRefresh(EmbeddedCli *cli);
