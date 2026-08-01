@@ -1,3 +1,7 @@
+/**
+ * @file log_infra.c
+ * @brief Logging infrastructure implementation.
+ */
 #include <stdarg.h>
 #include <stdatomic.h>
 #include <stddef.h>
@@ -14,7 +18,9 @@
 
 uint64_t get_timestamp48(void); // prototype without include file
 
+#ifndef LOG_BUF_SIZE
 #define LOG_BUF_SIZE 4096
+#endif
 #define LOG_BUF_MASK (LOG_BUF_SIZE - 1)
 
 static_assert((LOG_BUF_SIZE & LOG_BUF_MASK) == 0, "LOG_BUF_SIZE must be a power of 2");
@@ -88,10 +94,10 @@ typedef struct log_data_s {
 // -- Globals --
 
 __attribute__((section(".log_buffer"), used)) alignas(8) static log_buf_t log_buf = {
-    .pad1 = 0xACDCBABE,
+    .pad1 = 0xECECECEC,
     .guard_start = 0xDEADBEEF,
     .guard_end = 0xDEADBEEF,
-    .pad2 = 0xACDCBABE
+    .pad2 = 0xECECECEC
 };
 alignas(8) static log_ring_t log_ring = {
     .data = log_buf.data,
@@ -165,25 +171,18 @@ static void copy_to_ring(uint32_t start_pos, const void *src, uint32_t len)
     // array
     uint32_t space_to_end = log_ring.size - hid;
 
-    DBG_PAYLOAD(size_write, len);
-
     if (len <= space_to_end) { // [[likely]]
-        ADD_BREADCRUMB(write_breadcrumb, 2);
         // full message fits linearly
-        // use optimized copy_u64 for max QWORD throughput
+        // use copy_u64 for max QWORD throughput
         copy_u64(&log_ring.data[hid], src, len);
-        RST_BREADCRUMB(write_breadcrumb);
     } else {
-        ADD_BREADCRUMB(write_breadcrumb, 0);
         // message must be split
         // fill the remaining space at the end
         copy_u64(&log_ring.data[hid], src, space_to_end);
 
-        ADD_BREADCRUMB(write_breadcrumb, 1);
         // wrap to the beginning and copy the rest
         uint32_t remaining = len - space_to_end;
         copy_u64(&log_ring.data[0], (uint8_t *)src + space_to_end, remaining);
-        RST_BREADCRUMB(write_breadcrumb);
     }
 }
 
@@ -192,35 +191,27 @@ static void copy_from_ring(void *dst, uint32_t start_pos, uint32_t len)
     uint32_t tid = start_pos & log_ring.mask; // tail index
     uint32_t space_to_end = log_ring.size - tid;
 
+#ifdef DEBUG
     DBG_PAYLOAD(size_read, len);
     DBG_PAYLOAD(size_space_to_end, space_to_end);
-#ifdef DEBUG
     if (((uintptr_t)dst & 0x7) != 0) {
         ADD_BREADCRUMB(invalid_dst_addr, 1);
         printf("\r%s: " UI_COLOR_RED "[LOG] Error: " UI_STYLE_RESET "destination address %p is not 8-byte aligned for %u bytes read from ring at %u \n", __func__, dst, len, start_pos);
         printf("\r%s: " UI_COLOR_GREEN "[LOG] Previous valid address: " UI_STYLE_RESET "%p\n", __func__, payload_addr_read);
     }
 #endif
-    DBG_PAYLOAD(addr_read, (uintptr_t)dst);
 
     if (len <= space_to_end) {
-        ADD_BREADCRUMB(read_breadcrumb, 2);
         // data is linear in the buffer
         copy_u64(dst, &log_ring.data[tid], len);
-        RST_BREADCRUMB(read_breadcrumb);
     } else {
-        ADD_BREADCRUMB(read_breadcrumb, 0);
         // data is wrapped; split the read
         // read from tail to the physical end of array
         copy_u64(dst, &log_ring.data[tid], space_to_end);
 
-        ADD_BREADCRUMB(read_breadcrumb, 1);
         // read remaining from the physical start of array
         uint32_t remaining = len - space_to_end;
-        DBG_PAYLOAD(size_remaining, remaining);
         copy_u64((uint8_t *)dst + space_to_end, &log_ring.data[0], remaining);
-        RST_BREADCRUMB(read_breadcrumb);
-        DBG_PAYLOAD(size_remaining, 0);
     }
 }
 
@@ -229,20 +220,8 @@ static inline void zero_padding(uint32_t end_pos, uint8_t pad_len)
     uint32_t mask = log_ring.mask;
 
     // For an optmized build the compiler can optimize multiple sequential
-    // 8-bit writes into 32-bit, 24-bit, or 16-bit store instructions.
+    // 8-bit writes into 24-bit, or 16-bit store instructions.
     switch (pad_len) {
-    case 7:
-        log_ring.data[(end_pos + 6) & mask] = 0;
-        [[fallthrough]];
-    case 6:
-        log_ring.data[(end_pos + 5) & mask] = 0;
-        [[fallthrough]];
-    case 5:
-        log_ring.data[(end_pos + 4) & mask] = 0;
-        [[fallthrough]];
-    case 4:
-        log_ring.data[(end_pos + 3) & mask] = 0;
-        [[fallthrough]];
     case 3:
         log_ring.data[(end_pos + 2) & mask] = 0;
         [[fallthrough]];
@@ -257,52 +236,123 @@ static inline void zero_padding(uint32_t end_pos, uint8_t pad_len)
     }
 }
 
+static inline void aligned_zero_padding(uint32_t end_pos, uint8_t pad_len)
+{
+    uint32_t mask = log_ring.mask;
+    uint32_t hid = end_pos & mask; // head index
+
+    if ((hid + pad_len) > log_ring.size) {
+        zero_padding(end_pos, pad_len);
+        return;
+    }
+
+    uint32_t misalignment = hid & 3;
+    uint32_t align_bytes = (4 - misalignment) & 3;
+
+    if (align_bytes <= pad_len) {
+        if (align_bytes & 1) {
+            log_ring.data[hid] = 0;
+            hid += 1;
+        }
+        if (align_bytes >= 2) {
+            *(volatile uint16_t *)(&log_ring.data[hid]) = 0;
+            hid += 2;
+        }
+        pad_len -= align_bytes;
+    }
+
+    if (pad_len >= 4) {
+        *(volatile uint32_t *)(&log_ring.data[hid]) = 0;
+        hid += 4;
+        pad_len -= 4;
+    }
+
+    switch (pad_len) {
+    case 3:
+        log_ring.data[hid + 2] = 0;
+        [[fallthrough]];
+    case 2:
+        log_ring.data[hid + 1] = 0;
+        [[fallthrough]];
+    case 1:
+        log_ring.data[hid] = 0;
+        [[fallthrough]];
+    default:
+        break;
+    }
+}
+
 void log_dispatch(uint8_t domain, uint8_t entity, uint8_t level, const char *fmt, va_list args)
 {
     alignas(8) log_data_t write_data;
 
     int len = vsnprintf(write_data.buf, MAX_DATA_SIZE, fmt, args);
-    // clang-format off
     if (len <= 0) {
-        printf("\r%s: " UI_COLOR_RED "[LOG] Error: " UI_STYLE_RESET "invalid log message length %d\n", __func__, len);
+        printf("\r%s: " UI_COLOR_RED "[LOG] Error: invalid log length %d" UI_STYLE_RESET "\r\n", __func__, len);
         return;
     }
-    // clang-format on
+
     len = MIN2(len, MAX_DATA_SIZE);
-    uint32_t tot_size = ALIGN_UP((uint32_t)HDR_SIZE + (uint32_t)len, 8); // message size increments in multiple of 64 bits
+
+    uint32_t tot_size = ALIGN_UP((uint32_t)HDR_SIZE + (uint32_t)len, 8);
     uint8_t  pad_len = (uint8_t)(tot_size - (HDR_SIZE + len));
 
-    uint_fast32_t tail = atomic_load_explicit(&log_ring.tail, memory_order_relaxed);
-    uint32_t      head;
+    uint_fast32_t tail = atomic_load_explicit(&log_ring.tail, memory_order_acquire);
+    uint_fast32_t head = atomic_load_explicit(&log_ring.head, memory_order_acquire);
+    uint_fast32_t start_pos;
 
     int retries = 120;
-    // re-evaluate head if we are competing for tail
+
     while (true) {
-        head = atomic_load_explicit(&log_ring.head, memory_order_relaxed);
+        if ((head + tot_size - tail) > log_ring.size) {
+            uint_fast32_t current_tail = tail;
 
-        if ((head + tot_size - tail) <= log_ring.size) {
-            break; // Space is available
+            uint32_t tid_tail = current_tail & log_ring.mask;
+
+            if (log_ring.data[tid_tail] == LOG_TAG_SEAL) {
+                log_hdr_t old_hdr;
+
+                if (tid_tail <= (log_ring.size - HDR_SIZE)) {
+                    old_hdr = *(log_hdr_t *)&log_ring.data[tid_tail];
+                } else {
+                    copy_from_ring(&old_hdr, current_tail, HDR_SIZE);
+                }
+
+                uint32_t old_size = (uint32_t)HDR_SIZE + (uint32_t)old_hdr.len + (uint32_t)old_hdr.pad;
+
+                uint_fast32_t next_tail = current_tail + old_size;
+                // clang-format off
+                if (atomic_compare_exchange_weak_explicit(&log_ring.tail, &tail, next_tail,
+                    memory_order_release, memory_order_acquire)) {
+                    atomic_fetch_add_explicit(&log_stats.drop_cnt, 1, memory_order_relaxed);
+                    tail = next_tail;
+                }
+            } else {
+                uint32_t next_tail = ALIGN_UP(current_tail + 8, 8);
+                if (atomic_compare_exchange_weak_explicit(&log_ring.tail, &tail, next_tail,
+                    memory_order_release, memory_order_acquire)) {
+                    tail = next_tail;
+                }
+            }
+            continue; // Re-evaluate if there is enough space now
         }
 
-        uint32_t new_tail = ALIGN_UP(head + tot_size - log_ring.size, 8);
-        if (atomic_compare_exchange_weak(&log_ring.tail, &tail, new_tail)) {
-            atomic_fetch_add_explicit(&log_stats.drop_cnt, 1, memory_order_relaxed);
-            break; // tail pushed
-        }
-        // If CAS failed, 'tail' is updated; loop restarts and re-loads 'head'
-
-        // bailout: too much contention
-        // clang-format off
-        if (--retries <= 0) {
-            printf("\r%s: " UI_COLOR_RED "[LOG] Error: " UI_STYLE_RESET "Contention Bailout\n", __func__);
-            return;
+        if (atomic_compare_exchange_weak_explicit(&log_ring.head, &head, head + tot_size,
+            memory_order_release, memory_order_acquire)) {
+            start_pos = head;
+            break; // Reservation successful
         }
         // clang-format on
+        if (--retries <= 0) {
+            printf("\r%s: " UI_COLOR_RED "[LOG] Error: Contention Bailout" UI_STYLE_RESET "\r\n", __func__);
+            return;
+        }
+
+        tail = atomic_load_explicit(&log_ring.tail, memory_order_acquire);
     }
 
-    uint32_t start_pos = atomic_fetch_add(&log_ring.head, tot_size);
-    uint32_t hid = start_pos & log_ring.mask;
-    uint64_t ts = get_timestamp48();
+    uint32_t hid = start_pos & log_ring.mask; // head index
+    uint64_t ts = get_timestamp48();          // timestamp
 
     alignas(8) log_hdr_t hdr = {
         .tag = LOG_TAG_FREE,
@@ -315,24 +365,24 @@ void log_dispatch(uint8_t domain, uint8_t entity, uint8_t level, const char *fmt
         .ts_low = (uint32_t)(ts & 0xFFFFFFFF)
     };
 
-    if (hid <= (log_ring.size - HDR_SIZE)) { // fast path: header is linear in the ring buffer
+    if (hid <= (log_ring.size - HDR_SIZE)) {
         *(uint64_t *)(&log_ring.data[hid]) = *(uint64_t *)&hdr;
         *(uint32_t *)(&log_ring.data[hid + 8]) = *(uint32_t *)((uint8_t *)&hdr + 8);
-        ADD_BREADCRUMB(write_breadcrumb, 8);
     } else {
         copy_to_ring(start_pos, &hdr, HDR_SIZE);
-        ADD_BREADCRUMB(write_breadcrumb, 9);
     }
 
-    DBG_PAYLOAD(pos_write, start_pos + HDR_SIZE);
-
-    *(uint32_t *)(&log_ring.data[hid + HDR_SIZE]) = *(uint32_t *)(write_data.buf);
-    if (len > 4) {
-        copy_to_ring(start_pos + HDR_SIZE + 4, write_data.buf + 4, len - 4);
+    if (hid <= (log_ring.size - (HDR_SIZE + 4))) {
+        *(uint32_t *)(&log_ring.data[hid + HDR_SIZE]) = *(uint32_t *)(write_data.buf);
+        if (len > 4) {
+            copy_to_ring(start_pos + HDR_SIZE + 4, write_data.buf + 4, len - 4);
+        }
+    } else {
+        copy_to_ring(start_pos + HDR_SIZE, write_data.buf, len);
     }
-    zero_padding(start_pos + HDR_SIZE + len, pad_len);
 
-    atomic_thread_fence(memory_order_release);
+    aligned_zero_padding(start_pos + HDR_SIZE + len, pad_len);
+
     atomic_store_explicit((_Atomic uint8_t *)&log_ring.data[hid], LOG_TAG_SEAL, memory_order_release);
     atomic_store(&log_ring.dirty, true);
     atomic_fetch_add_explicit(&log_stats.sum, 1, memory_order_relaxed);
@@ -341,54 +391,62 @@ void log_dispatch(uint8_t domain, uint8_t entity, uint8_t level, const char *fmt
 // assuming that caller checked if log_is_dirty()
 void log_flash(log_writer_t writer)
 {
-    alignas(8) static log_data_t read_data;
+    alignas(8) log_data_t read_data;
 
     uint32_t head = atomic_load_explicit(&log_ring.head, memory_order_acquire);
     uint32_t tail = atomic_load_explicit(&log_ring.tail, memory_order_acquire);
 
     while (tail < head) {
         alignas(8) log_hdr_t hdr;
+        uint32_t             tid = tail & log_ring.mask;
 
-        uint32_t tid = tail & log_ring.mask;
-        // is new tail produced
         uint32_t pending_tail = atomic_load_explicit(&log_ring.tail, memory_order_acquire);
-
         if (pending_tail > tail) {
             tail = pending_tail;
             continue;
         }
 
-        if (atomic_load_explicit((_Atomic uint8_t *)&log_ring.data[tid], memory_order_acquire) != LOG_TAG_SEAL) {
-            uint32_t search_start = tail;
+        uint8_t current_tag = (uint8_t)atomic_load_explicit((_Atomic int8_t *)&log_ring.data[tid], memory_order_acquire);
 
-            // scan forward 8 bytes at a time
-            while (tail < head &&
-                   atomic_load_explicit((_Atomic uint8_t *)&log_ring.data[tail & log_ring.mask], memory_order_relaxed) != LOG_TAG_SEAL) {
-                tail += 8;
+        if (current_tag != LOG_TAG_SEAL) {
+            uint32_t fresh_tail = atomic_load_explicit(&log_ring.tail, memory_order_acquire);
+            if (fresh_tail > tail) {
+                tail = fresh_tail;
+                continue; // Tail shifted! Reload and check the new position.
             }
 
-            if (tail < head &&
-                atomic_load_explicit((_Atomic uint8_t *)&log_ring.data[tail & log_ring.mask], memory_order_acquire) == LOG_TAG_SEAL) {
+            uint32_t search_start = tail;
+
+            while (tail < head) {
+                uint32_t sync_tid = tail & log_ring.mask;
+                uint8_t  sync_tag = (uint8_t)atomic_load_explicit((_Atomic int8_t *)&log_ring.data[sync_tid], memory_order_relaxed);
+
+                if (sync_tag == LOG_TAG_SEAL) {
+                    if ((sync_tid & 7) == 0) {
+                        break;
+                    }
+                }
+                tail++;
+            }
+            if (tail < head) {
                 atomic_store_explicit(&log_ring.tail, tail, memory_order_release);
                 tid = tail & log_ring.mask;
                 // clang-format off
                 printf("\r%s: " UI_COLOR_YELLOW "[LOG] Sync Recovery: " UI_STYLE_RESET
-                       "skipped %u bytes to find next tag\r\n", __func__, tail - search_start);
+                        "skipped %u bytes to find next tag\r\n", __func__, tail - search_start);
                 // clang-format on
             } else {
-                break;
+                break; // Producer mid-write. Break out and wait.
             }
         }
 
-        if (tid <= (log_ring.size - HDR_SIZE)) { // fast path: header is linear in the ring buffer
+        if (tid <= (log_ring.size - HDR_SIZE)) {
             *(uint64_t *)&hdr = *(uint64_t *)(&log_ring.data[tid]);
             *(uint32_t *)((uint8_t *)&hdr + 8) = *(uint32_t *)(&log_ring.data[tid + 8]);
-            ADD_BREADCRUMB(read_breadcrumb, 8);
         } else {
             copy_from_ring(&hdr, tail, HDR_SIZE);
-            ADD_BREADCRUMB(read_breadcrumb, 9);
         }
-        // was header evicted while we read it?
+
         if (atomic_load_explicit(&log_ring.tail, memory_order_acquire) != tail) {
             tail = atomic_load_explicit(&log_ring.tail, memory_order_acquire);
             continue;
@@ -396,21 +454,31 @@ void log_flash(log_writer_t writer)
 
         uint64_t ts = ((uint64_t)hdr.ts_high << 32) | hdr.ts_low;
 
-        DBG_PAYLOAD(pos_read, tail + HDR_SIZE);
-
         *(uint32_t *)(read_data.buf) = *(uint32_t *)(&log_ring.data[tid + HDR_SIZE]);
         if (hdr.len > 4) {
             copy_from_ring(read_data.buf + 4, tail + HDR_SIZE + 4, hdr.len - 4);
         }
         read_data.buf[hdr.len] = '\0';
 
-        if (writer)
-            writer(hdr.dom, hdr.ent, hdr.lvl, ts, read_data.buf, hdr.len);
+        uint8_t verify_tag = (uint8_t)atomic_load_explicit((_Atomic int8_t *)&log_ring.data[tid], memory_order_acquire);
+        if (verify_tag != LOG_TAG_SEAL) {
+            tail = atomic_load_explicit(&log_ring.tail, memory_order_acquire);
+            continue;
+        }
 
-        // mark the log entry free and update global tail
+        if (writer) {
+            writer(hdr.dom, hdr.ent, hdr.lvl, ts, read_data.buf, hdr.len);
+        }
+
         log_ring.data[tid] = LOG_TAG_FREE;
-        tail += (uint32_t)HDR_SIZE + (uint32_t)hdr.len + (uint32_t)hdr.pad;
-        atomic_store_explicit(&log_ring.tail, tail, memory_order_release);
+
+        pending_tail = atomic_load_explicit(&log_ring.tail, memory_order_acquire);
+        if (pending_tail <= tail) {
+            tail += (uint32_t)HDR_SIZE + (uint32_t)hdr.len + (uint32_t)hdr.pad;
+            atomic_store_explicit(&log_ring.tail, tail, memory_order_release);
+        } else {
+            tail = pending_tail;
+        }
     }
 
     atomic_store(&log_ring.dirty, false);
