@@ -9,6 +9,7 @@ CMakeCache.txt
 CMakeFiles/
 CMakePresets.json
 *.cmake
+!cmake/*.cmake
 
 # IDE Configurations
 .vscode/

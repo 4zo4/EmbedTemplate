@@ -199,7 +199,7 @@ void init_apic(void)
 
     const uint8_t ioapic_uart_irq = IOAPICIRQTBL(UART_IRQ_ID);
     ioapic_write(ioapic_uart_irq + 1, 0x00000000); // High 32-bits (Destination: APIC ID 0)
-#ifdef LEVEL_TRIGGERED
+#ifdef ENABLE_LEVEL_TRIGGERED
     // UART IRQ config Level-Triggered (Bit 15 = 1), Active-Low (Bit 13 = 1)
     ioapic_write(ioapic_uart_irq, // Low 32-bits (Triggers line unmasking atomically)
                  (X86_IRQ_VECTOR_BASE + UART_IRQ_ID) | BIT(IRQ_TRIGGER_MODE) | BIT(IRQ_PIN_POLARITY));
