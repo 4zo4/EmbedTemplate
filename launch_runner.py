@@ -9,6 +9,13 @@ import socket
 import select
 import termios
 import tty
+from tools.net.vfio_user_pkt_sniffer import (
+    launch_wireshark,
+    setup_log_directory,
+    resolve_absolute_paths,
+    start_vfio_user_pkt_sniffer,
+    stop_vfio_user_pkt_sniffer,
+)
 
 def resolve_target_paths(target_chip, image_name):
     """Locate target firmware artifacts."""
@@ -127,6 +134,10 @@ def main():
         "--debug", action="store_true",
         help="Enable GDB server on port 1234 and stop guest CPU at startup"
     )
+    parser.add_argument(
+        "--sniffer", action="store_true",
+        help="Launch packet sniffer to capture QEMU vfio-user traffic"
+    )
     args = parser.parse_args()
 
     if args.build:
@@ -156,6 +167,8 @@ def main():
     if not os.path.exists(target_image):
         print(f"\033[91m[Agent] ERROR: Firmware file not found: {target_image} Run compilation step first.\033[0m")
         sys.exit(1)
+
+    sniffer_proc = None
 
     if args.chip == "stm32f4":
         print("[Agent] Structuring QEMU layout for ARM STM32F4...")
@@ -205,6 +218,19 @@ def main():
             if not os.path.exists(vfio_user_sock):
                 print(f"\033[91m[Agent] FATAL: PCI-Bridge UDS '{vfio_user_sock}' not found. Please start the PCI-Bridge first.\033[0m")
                 sys.exit(1)
+            if args.sniffer:
+                project_root_abs, log_dir, pcap_file_path, slog_file_path = resolve_absolute_paths()
+                setup_log_directory(log_dir, pcap_file_path, slog_file_path, max_backups=2)
+                sniffer_proc = start_vfio_user_pkt_sniffer(
+                    project_root=project_root_abs,
+                    pcap_file_path=pcap_file_path,
+                    slog_file_path=slog_file_path,
+                    socket_path=vfio_user_sock
+                )
+                if sniffer_proc is None:
+                    print("\033[33m[Agent] WARNING: Sniffer failed to arm.\033[0m", flush=True)
+                else:
+                    launch_wireshark(log_dir, sniffer_proc)
             qemu_args.extend(["-device", "pcie-root-port,id=pcie.1"])
             json_config = '{"driver": "vfio-user-pci", "socket": {"type": "unix", "path": "/tmp/vfio-pcie.sock"}, "bus": "pcie.1", "id": "pcie_cosim"}'
             qemu_args.extend(["-device", json_config])
@@ -316,6 +342,9 @@ def main():
                 os.remove("/tmp/uart.sock")
             except Exception:
                 pass
+        if sniffer_proc:
+            print("[Agent] Tearing down vfio-user packet sniffer")
+            stop_vfio_user_pkt_sniffer(sniffer_proc)
 
         for proc, name in [(qemu_proc, "QEMU"), (socat_proc, "Socat"), (gdb_proc, "GDB")]:
             if proc:

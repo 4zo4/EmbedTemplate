@@ -11,5 +11,11 @@ CMakePresets.json
 *.cmake
 !cmake/*.cmake
 
+# Logs
+logs/
+
+# Python Artifacts
+tools/net/__pycache__/
+
 # IDE Configurations
 .vscode/
