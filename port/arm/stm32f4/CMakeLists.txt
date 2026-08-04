@@ -43,6 +43,7 @@ target_include_directories(stm32f4_lib PRIVATE
     ${FREERTOS_DIR}/portable/GCC/ARM_CM4F
 )
 target_compile_options(stm32f4_lib PRIVATE ${TARGET_CHIP_FLAGS} -fno-builtin-printf -fno-builtin-puts -Wall -Wextra -O3)
+target_compile_definitions(stm32f4_lib PRIVATE BARE_METAL)
 if(RTOS)
     target_compile_definitions(stm32f4_lib PRIVATE ENABLE_RTOS "${ENABLE_TARGET_CHIP}")
 endif()

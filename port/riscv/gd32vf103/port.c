@@ -9,6 +9,7 @@
 
 #include "fifo.h"
 #include "event.h"
+#include "init.h"
 #include "log.h"
 #include "log_marker.h"
 #include "utils.h"
@@ -74,8 +75,12 @@ volatile EVT_BITMAP event_notify = 0;
 static bool echo_enabled = true;
 static bool buffered_mode = false;
 
+alignas(8) uint32_t initialized;
+
 void init_uart(void)
 {
+    if (initialized & UART_INITIALIZED)
+        return;
 #ifdef TARGET_HW_GD32VF103
     // Enable Clocks (GPIOA + UART0)
     RCU_APB2EN |= BIT(2) | BIT(14);
@@ -114,6 +119,7 @@ void init_uart(void)
     const uintptr_t mie_bit = 0x800;
     __asm volatile("csrs mie, %0" : : "r"(mie_bit));
 #endif
+    initialized |= UART_INITIALIZED;
     log_set_level(DOMAIN_SYS, ENTITY_UART, LOG_LEVEL_INFO);
     LOG_SYS_INFO("UART initialized with baud rate 115200");
 }

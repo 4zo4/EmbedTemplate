@@ -9,6 +9,7 @@
 #include <stdio.h>
 
 #include "common.h"
+#include "init.h"
 
 // STM32F4 UART Base and Register Definitions (Cortex-M4)
 #define USART1_BASE 0x40011000
@@ -25,6 +26,8 @@
 #define USART_CR1_RE BIT(2)     // Receiver Enable
 #define USART_CR1_RXNEIE BIT(5) // RX Interrupt Enable
 
+alignas(8) uint32_t initialized;
+
 static const irq_config_t peripheral_irqs[] = {
     {0,  RTOS_SAFE_PRIO}, // WWDG
     {37, RTOS_SAFE_PRIO}, // USART1
@@ -32,6 +35,8 @@ static const irq_config_t peripheral_irqs[] = {
 
 void init_uart(void)
 {
+    if (initialized & UART_INITIALIZED)
+        return;
     // Configure baud rate for 115200 assuming System Clock (168 MHz)
     // Baud = fCK / (8 * (2 - OVER8) * USARTDIV), APB2 Clock (fCK) is 84 MHz for USART1
     USART_BRR = 0x2D9;
@@ -39,7 +44,9 @@ void init_uart(void)
 
     nvic_cfg_peripheral_irqs(peripheral_irqs, sizeof(peripheral_irqs) / sizeof(irq_config_t));
 
+    initialized |= UART_INITIALIZED;
     log_set_level(DOMAIN_SYS, ENTITY_UART, LOG_LEVEL_INFO);
+    LOG_SYS_INFO("UART initialized with baud rate 115200");
 }
 
 void uart_flush(void)

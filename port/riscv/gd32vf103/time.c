@@ -10,6 +10,7 @@
 #include <stdint.h>
 
 #include "event.h"
+#include "init.h"
 #include "log.h"
 #include "log_marker.h"
 #include "utils.h"
@@ -48,7 +49,10 @@ static uint64_t boot_ts = 0;
 
 void init_timestamp(void)
 {
+    if (initialized & TIMESTAMP_INITIALIZED)
+        return;
     // Machine timer starts at reset; no specific init required for mtime
+    initialized |= TIMESTAMP_INITIALIZED;
     log_set_level(DOMAIN_SYS, ENTITY_TIMER, LOG_LEVEL_INFO);
     LOG_SYS_INFO("Timestamp initialized");
 }
@@ -73,6 +77,8 @@ uint64_t get_timestamp48(void)
 #ifndef ENABLE_RTOS
 void init_systick(void)
 {
+    if (initialized & SYSTICK_INITIALIZED)
+        return;
     uint64_t next = get_timestamp48() + TICK_INTERVAL;
 
     // Prevent premature trigger by setting High to max
@@ -84,6 +90,10 @@ void init_systick(void)
 
     __asm volatile("csrs mie, %0" : : "r"(0x80));
     __asm volatile("csrs mstatus, %0" : : "r"(0x8));
+
+    initialized |= SYSTICK_INITIALIZED;
+
+    LOG_SYS_INFO("SysTick initialized for 1ms ticks");
 }
 
 static volatile uint32_t system_ticks = 0;

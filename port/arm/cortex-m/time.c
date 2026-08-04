@@ -11,6 +11,7 @@
 #include <stdint.h>
 
 #include "event.h"
+#include "init.h"
 #include "log.h"
 #include "log_marker.h"
 #include "utils.h"
@@ -36,6 +37,8 @@ static uint64_t boot_ts = 0;
 
 void init_timestamp(void)
 {
+    if (initialized & TIMESTAMP_INITIALIZED)
+        return;
 #ifdef TARGET_HW_STM32F4
     DWT_LAR = DWT_LAR_UNLOCK; // Unlock DWT access
 #endif
@@ -43,6 +46,7 @@ void init_timestamp(void)
     DWT_CYCCNT = 0;               // Reset cycle counter
     DWT_CONTROL |= DWT_CYCCNTENA; // Start cycle counter
 
+    initialized |= TIMESTAMP_INITIALIZED;
     log_set_level(DOMAIN_SYS, ENTITY_TIMER, LOG_LEVEL_INFO);
     LOG_SYS_INFO("Timestamp initialized");
 }
@@ -88,12 +92,15 @@ static volatile uint32_t system_ticks = 0;
 
 void init_systick(void)
 {
+    if (initialized & SYSTICK_INITIALIZED)
+        return;
     // Calculate reload value for 1ms (ticks per milli)
     STK_LOAD = (CPU_HZ / 1000) - 1;
     STK_VAL = 0;
     STK_CONTROL = (STK_CTRL_CLKSOURCE | STK_CTRL_TICKINT | STK_CTRL_ENABLE);
 
     scb_cfg_system_irqs();
+    initialized |= SYSTICK_INITIALIZED;
     LOG_SYS_INFO("SysTick initialized for 1ms ticks");
 }
 
