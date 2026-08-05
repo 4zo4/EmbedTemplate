@@ -72,11 +72,11 @@ def compile_firmware(target_chip, opt_args, verbose=False):
                 "-DCMAKE_TOOLCHAIN_FILE=cmake/arm-none-eabi.cmake",
                 "-DTARGET_CHIP=cortex-a9-virt"
             ])
-    elif target_chip == "gd32vf103":
+    elif target_chip in ["gd32vf103", "gd32vf103-virt"]:
         if is_first_build:
             cmake_gen.extend([
                 "-DCMAKE_TOOLCHAIN_FILE=cmake/riscv-none-elf.cmake",
-                "-DTARGET_CHIP=gd32vf103"
+                f"-DTARGET_CHIP={target_chip}"
             ])
     elif target_chip == "stm32f4":
         if is_first_build:
@@ -127,7 +127,7 @@ def main():
         help="Enable verbose build output"
     )
     parser.add_argument(
-        "--chip", choices=["stm32f4", "gd32vf103", "cortex-a9-virt", "x86-virt", "x86_64"], default="stm32f4",
+        "--chip", choices=["stm32f4", "gd32vf103", "gd32vf103-virt", "cortex-a9-virt", "x86-virt", "x86_64"], default="stm32f4",
         help="Specify the target chip (default: stm32f4)"
     )
     parser.add_argument(
@@ -149,9 +149,13 @@ def main():
         print(f"\033[92m[Agent] '{args.chip}' is a Host target. No QEMU required. Exiting.\033[0m")
         print(f"\033[95m[Agent] You can directly run '{image_exe}'.\033[0m")
         sys.exit(0)
+    elif args.chip == "gd32vf103":
+        print(f"\033[92m[Agent] '{args.chip}' is a Renode RISC-V GD32VF103 target. Exiting.\033[0m")
+        print(f"\033[95m[Agent] You can run '{image_elf} in Renode.'\033[0m")
+        sys.exit(0)
 
     arch = None
-    if args.chip == "gd32vf103":
+    if args.chip in ["gd32vf103", "gd32vf103-virt"]:
         arch = "riscv"
     elif args.chip in ["stm32f4", "cortex-a9-virt"]:
         arch = "arm"
@@ -161,7 +165,7 @@ def main():
     print(f"[Agent] Target Chip: {args.chip}")
     print("\033[94m[Agent] Resolving workspace infrastructure layout...\033[0m")
 
-    target_image = image_bin if args.chip == "gd32vf103" else image_elf
+    target_image = image_elf
     print(f"\033[94m[Agent] Target firmware located at:\033[0m {target_image}")
 
     if not os.path.exists(target_image):
@@ -190,17 +194,17 @@ def main():
             "-serial", f"unix:/tmp/uart.sock,server=on,wait=on",
             "-device", f"loader,file={image_elf},cpu-num=0",
         ]
-    elif args.chip == "gd32vf103":
-        print("[Agent] Structuring QEMU layout for RISC-V GD32VF103...")
+    elif args.chip == "gd32vf103-virt":
+        print("[Agent] Structuring QEMU layout for RISC-V GD32VF103 Virtual...")
         qemu_bin = "qemu-system-riscv32"
         qemu_args = [
-            "-M", "none",
-            "-cpu", "rv32,im=true,a=true,c=true,Zicsr=true",
-            "-nographic",
+            "-M", "virt",
+            "-cpu", "rv32",
+            "-m", "32M",
+            "-display", "none",
+            "-bios", "none",
             "-serial", f"unix:/tmp/uart.sock,server=on,wait=on",
-            "-device", f"loader,addr=0x08000000,size=0x20000,type=ram", # 128KB execution space
-            "-device", f"loader,addr=0x20000000,size=0x8000,type=ram",  # 32KB data space
-            "-kernel", str(image_elf),
+            "-device", f"loader,file={image_elf},cpu-num=0"
         ]
     elif args.chip == "x86-virt":
         qemu_bin = "qemu-system-x86_64"

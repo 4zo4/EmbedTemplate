@@ -2,15 +2,20 @@
 #define FREERTOS_CONFIG_H
 
 #ifdef ARCH_RISCV
-#ifdef TARGET_GD32VF103
 /* GD32VF103 Specifics */
+#ifdef TARGET_GD32VF103_VIRT                                  // QEMU Virt
+#define configCPU_CLOCK_HZ (10000000UL)                       // 10 MHz QEMU CLINT clock rate
+#define configMTIME_BASE_ADDRESS (0x02000000UL + 0xBFF8UL)    // QEMU Virt CLINT MTIME Offset
+#define configMTIMECMP_BASE_ADDRESS (0x02000000UL + 0x4000UL) // QEMU Virt CLINT MTIMECMP Offset
+#elif defined(TARGET_GD32VF103)                               // Renode GD32VF103
+#define configCPU_CLOCK_HZ ((unsigned long)108000000)         // 108MHz
 #define configMTIME_BASE_ADDRESS (0xD1000000UL)
 #define configMTIMECMP_BASE_ADDRESS (0xD1000008UL)
-#else // TARGET_HW_GD32VF103
+#else                                                 // TARGET_GD32VF103_HW
+#define configCPU_CLOCK_HZ ((unsigned long)108000000) // 108MHz
 #define configMTIME_BASE_ADDRESS (0xD1000000UL + 0xBFF8UL)
 #define configMTIMECMP_BASE_ADDRESS (0xD1000000UL + 0x4000UL)
-#endif                                                // GD32VF103
-#define configCPU_CLOCK_HZ ((unsigned long)108000000) // 108MHz
+#endif
 #define configMAX_PRIORITIES (7)
 #elif defined(ARCH_ARM)
 #ifdef TARGET_CORTEX_A9_VIRT

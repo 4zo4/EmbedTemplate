@@ -11,9 +11,10 @@
  */
 #include <stdint.h>
 #include <stdio.h>
-#include <arch/arch_ops.h>
 
-#ifdef TARGET_HW_GD32VF103
+#include "arch/arch_ops.h"
+
+#ifdef TARGET_GD32VF103_HW
 #define IRQ_HANDLER __attribute__((interrupt))
 #else
 #define IRQ_HANDLER
@@ -24,7 +25,7 @@ void freertos_risc_v_trap_handler(void);
 
 extern uint32_t _sdata, _edata, _sbss, _ebss, _sidata, _estack, __global_pointer$;
 
-void IRQ_HANDLER timer_handler(void);
+void IRQ_HANDLER SysTick_Handler(void);
 void IRQ_HANDLER UART0_irq_handler(void);
 void IRQ_HANDLER default_irq_handler(void)
 {
@@ -42,13 +43,13 @@ void (*const vector_table[])(void) __attribute__((section(".vectors"), aligned(6
     [7] = freertos_risc_v_trap_handler,
 #else // !ENABLE_RTOS
     [3 ... 6] = default_irq_handler,
-    [7] = timer_handler, // 7: Machine Timer
+    [7] = SysTick_Handler, // 7: Machine Timer
 #endif
     // Peripheral Interrupts
     [56] = UART0_irq_handler, // 56: UART0
 };
 
-void __attribute__((interrupt, aligned(4))) trap_dispatch(void) 
+void __attribute__((interrupt, aligned(4))) trap_dispatch(void)
 {
     uintptr_t mcause;
     __asm volatile("csrr %0, mcause" : "=r"(mcause));
@@ -57,11 +58,11 @@ void __attribute__((interrupt, aligned(4))) trap_dispatch(void)
         uintptr_t code = mcause & 0x3FF;
 
         switch (code) {
-        case 7:  // Machine Timer Interrupt (MTIME)
-            timer_handler(); 
+        case 7: // Machine Timer Interrupt (MTIME)
+            SysTick_Handler();
             break;
         case 11: // Machine External Interrupt (From PLIC)
-            UART0_irq_handler(); 
+            UART0_irq_handler();
             break;
         default:
             printf("[CRITICAL] Unhandled Interrupt %lu Detected!\r\n", (unsigned long)code);
@@ -90,9 +91,9 @@ void __attribute__((section(".init"), naked)) _start(void)
     while (dst < &_ebss)
         *dst++ = 0;
 
-#ifdef TARGET_HW_GD32VF103
+#ifdef TARGET_GD32VF103_HW
     // Real Hardware: ECLIC Mode (Vector Table + Mode Bits 0x3)
-    __asm volatile (
+    __asm volatile(
         ".option push\n"
         ".option norelax\n"
         "la t0, vector_table\n"
@@ -100,13 +101,21 @@ void __attribute__((section(".init"), naked)) _start(void)
         "csrw mtvec, t0\n"
         ".option pop"
     );
-#else // Renode simulated hardware
+#else // Renode simulated hardware or QEMU Virt
+    // Simulated Hardware: Direct Mode (Vector Table + Mode Bits 0x0)
+    __asm volatile(
+        ".option push\n"
+        ".option norelax\n"
+        "la t0, vector_table\n"
+        "csrw mtvec, t0\n"
+        ".option pop"
+    );
 #ifdef ENABLE_RTOS
-    // Renode RTOS: Direct Mode to FreeRTOS Assembly Handler
+    // RTOS: Direct Mode to FreeRTOS Assembly Handler
     __asm volatile("la t0, freertos_risc_v_trap_handler; csrw mtvec, t0");
 #else
-    // Renode non-RTOS: Direct Mode to IRQ Dispatcher
-    __asm volatile (
+    // non-RTOS: Direct Mode to IRQ Dispatcher
+    __asm volatile(
         ".option push\n"
         ".option norelax\n"
         "lui t0, %%hi(trap_dispatch)\n"
@@ -116,7 +125,7 @@ void __attribute__((section(".init"), naked)) _start(void)
         : : : "t0"
     );
 #endif // ENABLE_RTOS
-#endif // TARGET_HW_GD32VF103
+#endif // TARGET_GD32VF103_HW
 
 #ifdef __cplusplus
     extern void __libc_init_array(void);

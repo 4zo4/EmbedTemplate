@@ -22,9 +22,9 @@
 #undef getchar
 #undef putchar
 
-#ifdef TARGET_HW_GD32VF103
+#ifdef TARGET_GD32VF103_HW
 #define IRQ_HANDLER __attribute__((interrupt))
-#else
+#else // Renode or QEMU
 #define IRQ_HANDLER
 #endif
 
@@ -35,9 +35,8 @@
 #define LOG_SYS_DEBUG(...) LOG_ENTITY_DEBUG(ID_SYS(ENT_UART), __VA_ARGS__)
 
 // GD32VF103 UART Base and Register Definitions
+#ifdef TARGET_GD32VF103_HW
 #define UART0_BASE 0x40013800
-
-#ifdef TARGET_HW_GD32VF103
 #define UART_STAT (*(volatile uint32_t *)(UART0_BASE + 0x00))
 #define UART_DATA (*(volatile uint32_t *)(UART0_BASE + 0x04))
 #define UART_BAUD (*(volatile uint32_t *)(UART0_BASE + 0x08))
@@ -46,14 +45,22 @@
 #define UART_RBNE BIT(5) // Read Data Buffer Not Empty
 #define UART_TBE BIT(7)  // Transmit Buffer Empty
 
-#else // Renode NS16550
-#define UART_DATA (*(volatile uint8_t *)(UART0_BASE + 0x00))
-#define UART_IER (*(volatile uint8_t *)(UART0_BASE + 0x01))
-#define UART_FCR (*(volatile uint8_t *)(UART0_BASE + 0x02))
-#define UART_STAT (*(volatile uint8_t *)(UART0_BASE + 0x05))
+#else // Renode NS16550 or QEMU Virt
+#ifdef TARGET_GD32VF103_VIRT
+#define UART0_BASE 0x10000000 // QEMU Virt UART Address
+#else                         // Renode NS16550
+#define UART0_BASE 0x40013800 // Renode NS16550 UART Address
 #endif
+#define UART_DATA (*(volatile uint8_t *)(UART0_BASE + 0x00)) // Holds RBR/THR
+#define UART_DLL (*(volatile uint8_t *)(UART0_BASE + 0x00))  // Divisor Latch Low (when DLAB=1)
+#define UART_IER (*(volatile uint8_t *)(UART0_BASE + 0x01))  // Interrupt Enable (when DLAB=0)
+#define UART_DLM (*(volatile uint8_t *)(UART0_BASE + 0x01))  // Divisor Latch High (when DLAB=1)
+#define UART_FCR (*(volatile uint8_t *)(UART0_BASE + 0x02))  // FIFO Control
+#define UART_LCR (*(volatile uint8_t *)(UART0_BASE + 0x03))  // Line Control
+#define UART_STAT (*(volatile uint8_t *)(UART0_BASE + 0x05)) // Line Status (LSR)
+#endif                                                       // TARGET_GD32VF103_HW
 
-#ifdef TARGET_HW_GD32VF103
+#ifdef TARGET_GD32VF103_HW
 #define RCU_BASE 0x40021000
 #define RCU_APB2EN (*(volatile uint32_t *)(RCU_BASE + 0x18))
 #define ECLIC_BASE 0xD2000000
@@ -61,8 +68,14 @@
 #define ECLIC_INT_IP(id) (*(volatile uint8_t *)(ECLIC_BASE + 0x1000 + (id) * 4))
 #define ECLIC_INT_ATTR(id) (*(volatile uint8_t *)(ECLIC_BASE + 0x1002 + (id) * 4))
 #define GPIOA_CTL1 (*(volatile uint32_t *)0x40010804)
-#else // Renode
-#define PLIC_BASE 0xD2000000
+#else
+#ifdef TARGET_GD32VF103_VIRT
+#define PLIC_BASE 0x0C000000 // QEMU Virt PLIC Address
+#define UART0_IRQ_ID 10      // UART0 IRQ on QEMU Virt
+#else                        // Renode
+#define PLIC_BASE 0xD2000000 // Renode PLIC Address
+#define UART0_IRQ_ID 56      // Renode NS16550 IRQ ID
+#endif
 #define PLIC_PRIORITY(id) (*(volatile uint32_t *)(PLIC_BASE + (id) * 4))
 #define PLIC_ENABLE(id) (*(volatile uint32_t *)(PLIC_BASE + 0x2000 + ((id) / 32) * 4))
 #define PLIC_THRESHOLD (*(volatile uint32_t *)(PLIC_BASE + 0x200000))
@@ -81,7 +94,7 @@ void init_uart(void)
 {
     if (initialized & UART_INITIALIZED)
         return;
-#ifdef TARGET_HW_GD32VF103
+#ifdef TARGET_GD32VF103_HW
     // Enable Clocks (GPIOA + UART0)
     RCU_APB2EN |= BIT(2) | BIT(14);
 
@@ -105,16 +118,20 @@ void init_uart(void)
     // Configure ECLIC for UART0 (ID 56)
     ECLIC_INT_ATTR(56) = 0x3; // Trigger: Level, Type: Vectored
     ECLIC_INT_IE(56) = 1;     // Enable Interrupt
-#else                         // Renode NS16550
-    UART_IER = 0x01; // Interrupt Enable for Renode NS16550
-    UART_FCR = 0x07; // Enable FIFO, clear RX/TX buffers for Renode NS16550
-    PLIC_PRIORITY(56) = 1;
-    PLIC_ENABLE(56) |= (1 << (56 % 32)); // Enable interrupt source
+#else                         // Renode NS16550 or QEMU Virt
+    UART_LCR = 0x80; // Enable DLAB
+    UART_DLL = 0x01; // Set Divisor LSB (115200 Baud)
+    UART_DLM = 0x00; // Set Divisor MSB
+    UART_LCR = 0x03; // Disable DLAB, Lock 8N1 Framing Mode
+    UART_IER = 0x01; // Enable RX Interrupt
+    UART_FCR = 0x07; // Enable FIFO, clear RX/TX buffers
+    PLIC_PRIORITY(UART0_IRQ_ID) = 1;
+    PLIC_ENABLE(UART0_IRQ_ID) |= (1 << (UART0_IRQ_ID % 32)); // Enable interrupt source
     PLIC_THRESHOLD = 0;
 #endif
     // Global Interrupt Enable (MIE bit in mstatus)
     __asm volatile("csrs mstatus, 8");
-#ifndef TARGET_HW_GD32VF103
+#ifndef TARGET_GD32VF103_HW
     // Machine Timer External Interrupts (MEIE) for PLIC
     const uintptr_t mie_bit = 0x800;
     __asm volatile("csrs mie, %0" : : "r"(mie_bit));
@@ -126,7 +143,7 @@ void init_uart(void)
 
 int putchar(int c)
 {
-#ifdef TARGET_HW_GD32VF103
+#ifdef TARGET_GD32VF103_HW
     while (!(UART_STAT & UART_TBE))
         ;
 #endif
@@ -191,10 +208,10 @@ void signal_data_ready(void)
 
 void uart_flush(void)
 {
-#ifdef TARGET_HW_GD32VF103
+#ifdef TARGET_GD32VF103_HW
     while (!(UART_STAT & UART_TBE))
         ;
-#else // Renode
+#else // Renode or QEMU
     (void)UART_STAT; // Dummy read
 #endif
 }
@@ -218,9 +235,9 @@ void uart_set_buffered_mode(bool enabled)
 
 void IRQ_HANDLER UART0_irq_handler(void)
 {
-#ifndef TARGET_HW_GD32VF103
+#ifndef TARGET_GD32VF103_HW
     uint32_t irq_id = PLIC_CLAIM;
-    if (irq_id == 56) {
+    if (irq_id == UART0_IRQ_ID) {
 #else
     if (UART_STAT & UART_RBNE) {
 #endif
@@ -233,7 +250,7 @@ void IRQ_HANDLER UART0_irq_handler(void)
         if (!buffered_mode || (c == '\n' || c == '\r'))
             signal_data_ready();
 
-#ifndef TARGET_HW_GD32VF103
+#ifndef TARGET_GD32VF103_HW
         PLIC_CLAIM = irq_id;
 #endif
     }

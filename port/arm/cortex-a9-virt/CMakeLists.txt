@@ -13,7 +13,6 @@ set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} ${CPU_FLAGS}" PARENT_SCOPE)
 set(CMAKE_EXE_LINKER_FLAGS "${CPU_FLAGS} -Wl,--gc-sections -T${LINKER_SCRIPT} -nostartfiles -nodefaultlibs -Wl,--entry=_start" PARENT_SCOPE)
 set(EXTRA_LIBS "-lgcc" PARENT_SCOPE)
 set(FREERTOS_PORT "ARM_CA9" PARENT_SCOPE)
-set(TARGET_CHIP "CORTEX_A9_VIRT" PARENT_SCOPE)
 set(CORTEX_A_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../cortex-a)
 set(TARGET_CHIP_LIB "cortex-a9-virt_lib" PARENT_SCOPE)
 set(TARGET_CHIP_SOURCES "" PARENT_SCOPE) # keep it empty for cortex-a9-virt port - we build the cortex-a9-virt_lib locally

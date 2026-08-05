@@ -15,7 +15,7 @@
 #include "log_marker.h"
 #include "utils.h"
 
-#ifdef TARGET_HW_GD32VF103
+#ifdef TARGET_GD32VF103_HW
 #define IRQ_HANDLER __attribute__((interrupt))
 #else
 #define IRQ_HANDLER
@@ -28,8 +28,8 @@
 #define LOG_SYS_DEBUG(...) LOG_ENTITY_DEBUG(ID_SYS(ENT_TIMER), __VA_ARGS__)
 
 // GD32VF103 Machine Timer Base and Register Definitions
+#ifdef TARGET_GD32VF103_HW
 #define MTIMER_BASE 0xD1000000
-#ifdef TARGET_HW_GD32VF103
 #define MTIME_LO (*(volatile uint32_t *)(MTIMER_BASE + 0x00))
 #define MTIME_HI (*(volatile uint32_t *)(MTIMER_BASE + 0x04))
 #define MTIMECMP_LO (*(volatile uint32_t *)(MTIMER_BASE + 0x08))
@@ -37,12 +37,17 @@
 #define CORE_FREQ 108000000ULL
 #define TICK_DIVISOR 4000                               // Timer clock is 1/4 of Core clock on GD32VF
 #define TICK_INTERVAL (CORE_FREQ / TICK_DIVISOR / 1000) // 1ms tick interval
-#else                                                   // Renode
+#else
+#ifdef TARGET_GD32VF103_VIRT
+#define MTIMER_BASE 0x02000000 // QEMU GD32VF103 virtual machine timer base address
+#else                          // Renode
+#define MTIMER_BASE 0xD1000000
+#endif
 #define MTIME_LO (*(volatile uint32_t *)(MTIMER_BASE + 0xBFF8))
 #define MTIME_HI (*(volatile uint32_t *)(MTIMER_BASE + 0xBFFC))
 #define MTIMECMP_LO (*(volatile uint32_t *)(MTIMER_BASE + 0x4000))
 #define MTIMECMP_HI (*(volatile uint32_t *)(MTIMER_BASE + 0x4004))
-#define TICK_INTERVAL 1000
+#define TICK_INTERVAL 10000
 #endif
 
 static uint64_t boot_ts = 0;
@@ -98,7 +103,7 @@ void init_systick(void)
 
 static volatile uint32_t system_ticks = 0;
 
-void IRQ_HANDLER timer_handler(void)
+void IRQ_HANDLER SysTick_Handler(void)
 {
     uint64_t next_tick = (((uint64_t)MTIMECMP_HI) << 32 | MTIMECMP_LO) + TICK_INTERVAL;
     MTIMECMP_LO = (uint32_t)next_tick;

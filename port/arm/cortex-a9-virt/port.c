@@ -103,6 +103,9 @@ void fault_handler(void)
 
 void init_uart(void)
 {
+    if (initialized & UART_INITIALIZED)
+        return;
+
     // Set baud rate to 115200
     PL011_IBRD = 27; // Integer part of the baud rate divisor
     PL011_FBRD = 8;  // Fractional part of the baud rate
@@ -112,6 +115,8 @@ void init_uart(void)
 
     gic_register_interrupt(UART_IRQ_ID, PL011_irq_handler);
     gic_enable_interrupt(UART_IRQ_ID, 0xA0); // Enable the PL011 Interrupt (IRQ 33)
+
+    initialized |= UART_INITIALIZED;
 
     log_set_level(DOMAIN_SYS, ENTITY_UART, LOG_LEVEL_INFO);
     LOG_UART_INFO("UART initialized with baud rate 115200");
@@ -125,6 +130,8 @@ void init_watchdog(void)
 extern alignas(8) volatile uintptr_t pcie_msi_base_addr;
 static void init_cortex_a9_virt_globals(void)
 {
+    if (initialized & GLOBALS_INITIALIZED)
+        return;
     cpu_hz = 24000000UL; // QEMU '-M virt' base timer frequency is 24MHz
     gicd_base_addr = GICD_BASE_ADDRESS;
     gicc_base_addr = GICC_BASE_ADDRESS;
@@ -135,6 +142,7 @@ static void init_cortex_a9_virt_globals(void)
 #ifndef ENABLE_RTOS
     enable_interrupts();
 #endif
+    initialized |= GLOBALS_INITIALIZED;
 }
 
 void (*volatile init_port_globals)(void) = init_cortex_a9_virt_globals;
