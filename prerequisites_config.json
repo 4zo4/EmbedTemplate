@@ -1,0 +1,79 @@
+{
+  "default_paths": {
+    "clone_tools_dir": "~/tools",
+    "clone_os_dir": "~/kernel"
+  },
+  "base_requirements": {
+    "packages": [
+      "git",
+      "wget",
+      "build-essential",
+      "ccache",
+      "numactl",
+      "perl",
+      "libfl-dev",
+      "zlib1g-dev",
+      "libgoogle-perftools-dev",
+      "libglib2.0-dev",
+      "libpixman-1-dev",
+      "libslirp-dev",
+      "meson",
+      "ninja-build",
+      "libjson-c-dev",
+      "libcmocka-dev",
+      "xterm",
+      "x11-xserver-utils",
+      "gcc-multilib",
+      "g++-multilib",
+      "libc6-dev-i386",
+      "gtkwave",
+      "python3-pexpect",
+      "python3-bpfcc",
+      "bpfcc-tools"
+    ],
+    "repos": [
+      { "path": "verilator/verilator", "type": "tools" },
+      { "path": "qemu/qemu", "type": "tools" },
+      { "path": "nutanix/libvfio-user", "type": "tools" }
+    ]
+  },
+  "scopes": [
+    {
+      "id": "debug",
+      "name": "Debug Tools",
+      "description": "Cross-architecture debugging utilities",
+      "packages": ["gdb-multiarch"],
+      "repos": []
+    },
+    {
+      "id": "arm_toolchain",
+      "name": "ARM Toolchain",
+      "description": "Compiler toolsets and C library support targets for ARM architectures",
+      "packages": ["gcc-arm-none-eabi", "binutils-arm-none-eabi", "libnewlib-arm-none-eabi"],
+      "repos": []
+    },
+    {
+      "id": "riscv_toolchain",
+      "name": "RISC-V Toolchain",
+      "description": "Compiler infrastructure and lightweight libc implementations for RISC-V",
+      "packages": ["gcc-riscv64-unknown-elf", "picolibc-riscv64-unknown-elf"],
+      "repos": []
+    },
+    {
+      "id": "networking",
+      "name": "Networking Tools",
+      "description": "Packet inspection tools, socket utilities, and virtualization interface dependencies",
+      "packages": ["tshark", "lsof", "telnet", "socat", "wireshark"],
+      "repos": []
+    },
+    {
+      "id": "linux_kernel",
+      "name": "Linux Kernel Source",
+      "description": "Clones the complete upstream Linux kernel tree to a dedicated workspace",
+      "packages": ["bison", "flex", "libelf-dev", "libssl-dev", "bc"],
+      "repos": [
+        { "path": "torvalds/linux", "type": "os" }
+      ]
+    }
+  ]
+}

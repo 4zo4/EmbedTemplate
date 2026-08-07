@@ -1,4 +1,5 @@
 # Prerequisites
+prerequisites.json
 *.swp
 
 # Build Directory for Supported Architectures
