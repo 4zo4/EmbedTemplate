@@ -1,13 +1,15 @@
 {
   "default_paths": {
     "clone_tools_dir": "~/tools",
-    "clone_os_dir": "~/kernel"
+    "clone_os_dir": "~/kernel",
+    "clone_bsp_dir": "~/bsp"
   },
   "base_requirements": {
     "packages": [
       "git",
       "wget",
       "build-essential",
+      "cmake",
       "ccache",
       "numactl",
       "perl",
@@ -17,34 +19,22 @@
       "libglib2.0-dev",
       "libpixman-1-dev",
       "libslirp-dev",
-      "meson",
       "ninja-build",
       "libjson-c-dev",
       "libcmocka-dev",
-      "xterm",
-      "x11-xserver-utils",
       "gcc-multilib",
-      "g++-multilib",
       "libc6-dev-i386",
-      "gtkwave",
       "python3-pexpect",
       "python3-bpfcc",
       "bpfcc-tools"
     ],
     "repos": [
-      { "path": "verilator/verilator", "type": "tools" },
-      { "path": "qemu/qemu", "type": "tools" },
-      { "path": "nutanix/libvfio-user", "type": "tools" }
+      { "path": "qemu/qemu", "id": "qemu", "type": "tools", "tag": "v11.1.0", "clone_depth": 1 },
+      { "path": "4zo4/FreeRTOS-Kernel", "id": "freertos", "dir": "freertos", "type": "os", "branch": "feature/embed_template_updates" },
+      { "path": "TF-A/trusted-firmware-a", "id": "tfa", "dir": "tf-a", "type": "bsp", "tag": "v2.15.0", "branch": "master", "clone_depth": 1, "upstream_url": "https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git" }
     ]
   },
   "scopes": [
-    {
-      "id": "debug",
-      "name": "Debug Tools",
-      "description": "Cross-architecture debugging utilities",
-      "packages": ["gdb-multiarch"],
-      "repos": []
-    },
     {
       "id": "arm_toolchain",
       "name": "ARM Toolchain",
@@ -55,24 +45,31 @@
     {
       "id": "riscv_toolchain",
       "name": "RISC-V Toolchain",
-      "description": "Compiler infrastructure and lightweight libc implementations for RISC-V",
+      "description": "Compiler toolsets and C library support targets for RISC-V",
       "packages": ["gcc-riscv64-unknown-elf", "picolibc-riscv64-unknown-elf"],
       "repos": []
     },
     {
       "id": "networking",
-      "name": "Networking Tools",
+      "name": "PCIe Co-Simulation Networking",
       "description": "Packet inspection tools, socket utilities, and virtualization interface dependencies",
-      "packages": ["tshark", "lsof", "telnet", "socat", "wireshark"],
+      "packages": ["tshark", "lsof", "telnet", "socat", "wireshark", "xterm", "x11-xserver-utils"],
       "repos": []
     },
     {
-      "id": "linux_kernel",
-      "name": "Linux Kernel Source",
-      "description": "Clones the complete upstream Linux kernel tree to a dedicated workspace",
-      "packages": ["bison", "flex", "libelf-dev", "libssl-dev", "bc"],
+      "id": "debug",
+      "name": "Debug Tools",
+      "description": "Cross-architecture debugging utilities",
+      "packages": ["gdb-multiarch", "xterm", "x11-xserver-utils"],
+      "repos": []
+    },
+    {
+      "id": "peakrdl",
+      "name": "PeakRDL",
+      "description": "RDL (Register Description Language) processing tool",
+      "packages": [],
       "repos": [
-        { "path": "torvalds/linux", "type": "os" }
+        { "id": "peakrdl", "path": "4zo4/PeakRDL-cheader", "dir": "peakrdl", "type": "tools", "branch": "feature/custom-templates" }
       ]
     }
   ]

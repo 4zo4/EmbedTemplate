@@ -1,6 +1,8 @@
 # Prerequisites
-prerequisites.json
+configs.json
 *.swp
+# Python Artifacts
+__pycache__/
 
 # Build Directory for Supported Architectures
 build/
@@ -15,8 +17,12 @@ CMakePresets.json
 # Logs
 logs/
 
-# Python Artifacts
-tools/net/__pycache__/
+# Third Party Dependencies
+third_party/bsp/tf-a
+!third_party/bsp/.gitkeep
+third_party/os/freertos
+!third_party/os/.gitkeep
+tools/peakrdl
 
 # IDE Configurations
 .vscode/
