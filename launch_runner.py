@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import glob
 import os
 from pathlib import Path
 import sys
@@ -36,8 +37,6 @@ def resolve_target_paths(target_chip, image_name):
 
     return project_root, elf_path, bin_path, exe_path
 
-from pathlib import Path
-
 def pci_build_status(target_chip):
     """Parse CMakeCache.txt to detect if ENABLE_PCI is set."""
     cache_file = Path(f"build/{target_chip}/CMakeCache.txt")
@@ -55,7 +54,8 @@ def compile_firmware(target_chip, opt_args, verbose=False):
     """CMake generation and compilation using default-override logic."""
     print(f"\033[94m[Agent] Starting compilation phase for target_chip: {target_chip}...\033[0m")
 
-    is_first_build = not os.path.exists(f"build/{target_chip}")
+    build_dir = Path("build") / target_chip
+    is_first_build = not build_dir.exists()
 
     if is_first_build:
         cmake_gen = [
@@ -108,10 +108,51 @@ def compile_firmware(target_chip, opt_args, verbose=False):
         subprocess.run(cmake_build, check=True)
         print("\033[92m[Agent] Compilation completed successfully.\033[0m")
     except subprocess.CalledProcessError as e:
-        print(f"\033[91m[Agent] ERROR: Compilation failed: {e}\033[0m")
+        print(f"\033[91m[Agent] Error: Compilation failed: {e}\033[0m")
         sys.exit(1)
 
+def start_pcie_cosim_bridge():
+    """Start PCIe Co-Simulation Bridge."""
+    project_root = Path(__file__).resolve().parent
+    parent_dir = project_root.parent
+
+    file = str(parent_dir / "*" / "src" / "bridge" / "pcie_cosim_bridge.cpp")
+    files = glob.glob(file)
+
+    if not files:
+        print("[Agent] Error: PCI-Bridge not found")
+        return None
+
+    if len(files) == 1:
+        pcie_cosim_source_path = Path(files[0])
+    else:
+        print("[Agent] Warning: found multiple PCI-Bridges")
+        return None
+
+    pcie_cosim_root = pcie_cosim_source_path.parents[2]
+    bridge_bin = pcie_cosim_root / "build" / "pcie_sim"
+    if not bridge_bin.exists():
+        print(f"[Agent] PCI-Bridge image not found. Compiling {bridge_bin}...")
+        try:
+            subprocess.run(["make"], cwd=pcie_cosim_root, check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"[🗙 Error] Compilation failed for {bridge_bin}: {e}")
+            return None
+
+    print("\033[92m[Agent] Spawning Terminal for PCI-Bridge...\033[0m")
+
+    current_env = os.environ.copy()
+    bridge_cmd = [
+        "xterm", "-hold", "-title", f"PCIe Co-Simulation Bridge",
+        "-e", str(bridge_bin), f"-Rvr"
+    ]
+    bridge_proc = subprocess.Popen(bridge_cmd, env=current_env)
+    time.sleep(1.0) # Give bridge time to start
+
+    return bridge_proc
+
 def main():
+    agent_id = os.getpid()
     parser = argparse.ArgumentParser(description="Simulation Framework Agent")
     parser.add_argument(
         "--build",
@@ -168,11 +209,14 @@ def main():
     target_image = image_elf
     print(f"\033[94m[Agent] Target firmware located at:\033[0m {target_image}")
 
-    if not os.path.exists(target_image):
-        print(f"\033[91m[Agent] ERROR: Firmware file not found: {target_image} Run compilation step first.\033[0m")
+    if not target_image.exists():
+        print(f"\033[91m[Agent] Error: Firmware file not found: {target_image} Run compilation step first.\033[0m")
         sys.exit(1)
 
+    bridge_proc = None
     sniffer_proc = None
+    gdb_sock = Path(f"/tmp/gdb_{agent_id}.sock")
+    uart_sock = Path(f"/tmp/uart_{agent_id}.sock")
 
     if args.chip == "stm32f4":
         print("[Agent] Structuring QEMU layout for ARM STM32F4...")
@@ -180,7 +224,7 @@ def main():
         qemu_args = [
             "-M", "netduinoplus2",
             "-nographic",
-            "-serial", f"unix:/tmp/uart.sock,server=on,wait=on",
+            "-serial", f"unix:{uart_sock},server=on,wait=on",
             "-kernel", str(image_elf),
         ]
     elif args.chip == "cortex-a9-virt":
@@ -191,7 +235,7 @@ def main():
             "-cpu", "cortex-a15",
             "-m", "128M",
             "-display", "none",
-            "-serial", f"unix:/tmp/uart.sock,server=on,wait=on",
+            "-serial", f"unix:{uart_sock},server=on,wait=on",
             "-device", f"loader,file={image_elf},cpu-num=0",
         ]
     elif args.chip == "gd32vf103-virt":
@@ -203,7 +247,7 @@ def main():
             "-m", "32M",
             "-display", "none",
             "-bios", "none",
-            "-serial", f"unix:/tmp/uart.sock,server=on,wait=on",
+            "-serial", f"unix:{uart_sock},server=on,wait=on",
             "-device", f"loader,file={image_elf},cpu-num=0"
         ]
     elif args.chip == "x86-virt":
@@ -213,41 +257,46 @@ def main():
             "-cpu", "pentium3",
             "-m", "128M",
             "-display", "none",
-            "-serial", f"unix:/tmp/uart.sock,server=on,wait=on",
+            "-serial", f"unix:{uart_sock},server=on,wait=on",
             "-kernel", str(image_elf),
         ]
         pci_enabled = pci_build_status(args.chip)
         if pci_enabled:
-            vfio_user_sock = "/tmp/vfio-pcie.sock"
-            if not os.path.exists(vfio_user_sock):
-                print(f"\033[91m[Agent] FATAL: PCI-Bridge UDS '{vfio_user_sock}' not found. Please start the PCI-Bridge first.\033[0m")
-                sys.exit(1)
-            if args.sniffer:
-                project_root_abs, log_dir, pcap_file_path, slog_file_path = resolve_absolute_paths()
-                setup_log_directory(log_dir, pcap_file_path, slog_file_path, max_backups=2)
-                sniffer_proc = start_vfio_user_pkt_sniffer(
-                    project_root=project_root_abs,
-                    pcap_file_path=pcap_file_path,
-                    slog_file_path=slog_file_path,
-                    socket_path=vfio_user_sock
-                )
-                if sniffer_proc is None:
-                    print("\033[33m[Agent] WARNING: Sniffer failed to arm.\033[0m", flush=True)
-                else:
-                    launch_wireshark(log_dir, sniffer_proc)
-            qemu_args.extend(["-device", "pcie-root-port,id=pcie.1"])
-            json_config = '{"driver": "vfio-user-pci", "socket": {"type": "unix", "path": "/tmp/vfio-pcie.sock"}, "bus": "pcie.1", "id": "pcie_cosim"}'
-            qemu_args.extend(["-device", json_config])
+            vfio_user_sock = Path("/tmp/vfio-pcie.sock")
+            if vfio_user_sock.exists():
+                print("\033[33m[Agent] Warning: PCI-Bridge already run.\033[0m", flush=True)
+            else:
+                bridge_proc = start_pcie_cosim_bridge()
+                if bridge_proc:
+                    if not vfio_user_sock.exists():
+                        print(f"\033[91m[Agent] Fatal: PCI-Bridge failed to initialize. UDS '{vfio_user_sock}' not found.\033[0m")
+                        sys.exit(1)
+                    if args.sniffer:
+                        project_root_abs, log_dir, pcap_file_path, slog_file_path = resolve_absolute_paths()
+                        setup_log_directory(log_dir, pcap_file_path, slog_file_path, max_backups=2)
+                        sniffer_proc = start_vfio_user_pkt_sniffer(
+                            project_root=project_root_abs,
+                            pcap_file_path=pcap_file_path,
+                            slog_file_path=slog_file_path,
+                            socket_path=vfio_user_sock
+                        )
+                        if sniffer_proc is None:
+                            print("\033[33m[Agent] Warning: Packet sniffer failed to arm.\033[0m", flush=True)
+                        else:
+                            launch_wireshark(log_dir, sniffer_proc)
+                    qemu_args.extend(["-device", "pcie-root-port,id=pcie.1"])
+                    json_config = '{"driver": "vfio-user-pci", "socket": {"type": "unix", "path": "/tmp/vfio-pcie.sock"}, "bus": "pcie.1", "id": "pcie_cosim"}'
+                    qemu_args.extend(["-device", json_config])
     else:
-        print(f"\033[91m[Agent] FATAL: Unsupported architecture/CPU pairing specified\033[0m")
+        print(f"\033[91m[Agent] Fatal: Unsupported architecture/CPU pairing specified\033[0m")
         sys.exit(1)
 
     if args.debug:
-        qemu_args.extend(["-s", "-S"])
+        qemu_args.extend(["-gdb", f"unix:{gdb_sock},server=on,wait=off", "-S"])
 
+    gdb_proc = None
     qemu_proc = None
     socat_proc = None
-    gdb_proc = None
 
     try:
         print(f"[Agent] QEMU initialization: {qemu_bin} {' '.join(qemu_args)}")
@@ -268,7 +317,7 @@ def main():
 
         while time.time() - start_time < 3.0:
             if qemu_proc.poll() is not None:
-                print("\033[91m[Agent] ERROR: QEMU exited unexpectedly.\033[0m")
+                print("\033[91m[Agent] Error: QEMU exited unexpectedly.\033[0m")
                 sys.exit(1)
             try:
                 qemu_ready = True
@@ -278,14 +327,14 @@ def main():
                 time.sleep(0.05)
 
         if not qemu_ready:
-            print("\033[91m[Agent] ERROR: Timeout connecting to QEMU.\033[0m")
+            print("\033[91m[Agent] Error: Timeout connecting to QEMU.\033[0m")
             sys.exit(1)
 
         print("\033[92m[Agent] Spawning Terminal for Serial (socat) Console...\033[0m")
 
         socat_cmd = [
-            "xterm", "-hold", "-title", f"UART Console {args.chip}",
-            "-e", "socat", f"-,rawer", f"unix-connect:/tmp/uart.sock"
+            "xterm", "-hold", "-title", f"Agent {agent_id} UART Console {args.chip}",
+            "-e", "socat", f"-,rawer", f"unix-connect:{uart_sock}"
         ]
         socat_proc = subprocess.Popen(socat_cmd, env=current_env)
         time.sleep(0.5) # Let socat connect and unblock QEMU
@@ -295,18 +344,17 @@ def main():
 
             gdb_commands = (
                 f"set architecture {arch}\n"
-                f"target remote localhost:1234\n"
+                f"target remote {gdb_sock}\n"
             )
-            gdb_script_path = os.path.join(project_root, "build", ".gdb_init_agent")
-            with open(gdb_script_path, "w") as f:
-                f.write(gdb_commands)
+            gdb_script_path = Path(project_root) / "build" / f".gdb_init_agent_{agent_id}"
+            gdb_script_path.write_text(gdb_commands)
 
             gdb_cmd = [
-                "xterm", "-hold", "-title", f"GDB Target {arch}/{args.chip}",
-                "-e", "gdb-multiarch", image_elf, "-x", gdb_script_path
+                "xterm", "-hold", "-title", f"Agent {agent_id} GDB Target {arch}/{args.chip}",
+                "-e", "gdb-multiarch", image_elf, "-x", str(gdb_script_path)
             ]
             gdb_proc = subprocess.Popen(gdb_cmd, env=current_env)
-            print("\033[95m[Agent] Debug mode active. GDB stub listening on port 1234. CPU frozen at entry point.\033[0m")
+            print(f"\033[95m[Agent] Debug mode active. GDB stub listening on UDS '{gdb_sock}'. CPU frozen at entry point.\033[0m")
 
         print("\033[94m[Agent] Press 'Ctrl + ]' to exit.\033[0m")
         old_settings = termios.tcgetattr(sys.stdin.fileno())
@@ -337,36 +385,79 @@ def main():
 
     except KeyboardInterrupt:
         pass
+
     finally:
         os.system("stty sane")
         print("\r\033[K", end="")
-        print(f"\r\033[96m[Agent] Tearing down infrastructure...\033[0m")
-        if os.path.exists("/tmp/uart.sock"):
-            try:
-                os.remove("/tmp/uart.sock")
-            except Exception:
-                pass
+        print("\r\033[96m[Agent] Tearing down infrastructure...\033[0m")
+
+        try:
+            uart_sock.unlink(missing_ok=True)
+        except Exception:
+            pass
+
         if sniffer_proc:
             print("[Agent] Tearing down vfio-user packet sniffer")
             stop_vfio_user_pkt_sniffer(sniffer_proc)
 
-        for proc, name in [(qemu_proc, "QEMU"), (socat_proc, "Socat"), (gdb_proc, "GDB")]:
-            if proc:
+        process_list = [
+            (qemu_proc, "QEMU"),
+            (socat_proc, "Socat"),
+            (gdb_proc, "GDB"),
+            (bridge_proc, "Bridge")
+        ]
+
+        for proc, name in process_list:
+            if not proc:
+                continue
+
+            if proc.poll() is None:
                 try:
-                    if proc.poll() is None:
-                        proc.terminate()
-                        proc.wait(timeout=1.0)
-                        print(f"[Agent] Terminated {name}.")
+                    proc.terminate()
+                    proc.wait(timeout=1.0)
+                    print(f"[Agent] Terminated {name}.")
+                except subprocess.TimeoutExpired:
+                    try:
+                        proc.kill()
+                        proc.wait()
+                        print(f"[Agent] Force killed {name} (Timeout expired).")
+                    except Exception:
+                        pass
                 except Exception:
                     try:
                         proc.kill()
                     except Exception:
                         pass
 
-        gdb_script_path = os.path.join(os.getcwd(), "build", ".gdb_init_agent")
-        if os.path.exists(gdb_script_path):
-            os.remove(gdb_script_path)
-    print("[Agent] Teardown complete.")
+        if bridge_proc:
+            bridge_sockets = [
+                "/tmp/vfio-pcie.sock",
+                "/tmp/pcie-cosim1.sock",
+                "/tmp/pcie-cosim2.sock"
+            ]
+
+            for sock_path in bridge_sockets:
+                sock = Path(sock_path)
+                try:
+                    if sock.exists() or sock.is_socket():
+                        sock.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+        if gdb_proc:
+            try:
+                gdb_sock.unlink(missing_ok=True)
+            except Exception:
+                pass
+            gdb_script = Path.cwd() / "build" / f".gdb_init_agent_{agent_id}"
+            try:
+                gdb_script.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
+        print("[Agent] Teardown complete.")
+
 
 if __name__ == "__main__":
     main()
