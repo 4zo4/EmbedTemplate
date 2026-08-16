@@ -10,6 +10,7 @@
 
 #include "common.h"
 #include "gic.h"
+#include "init.h"
 
 // QEMU Virt PrimeCell UART (PL011) Base Address and Register Definitions
 #define PL011_BASE_ADDRESS 0x09000000
