@@ -9,12 +9,12 @@ A modular C/C++ SDK and project template for SoC FW development and HW testing. 
 - **`src/drivers/`**: Hardware abstraction layer. Register C headers are auto-generated from RDL files.
 - **`port/`**: Porting layer for OS or hardware platforms.
 - **`third_party/`**:
-    - `os/freertos`: FreeRTOS-Kernel (Submodule).
-    - `bsp/tf-a`: ARM Trusted Firmware-A (Submodule).
-    - `lib/embedded-cli`: Reworked Interactive CLI (Subtree).
+    - `os/freertos`: FreeRTOS-Kernel (Fork).
+    - `bsp/tf-a`: ARM Trusted Firmware-A.
+    - `lib/embedded-cli`: Reworked Interactive CLI.
         [funbiscuit's embedded-cli](https://github.com/funbiscuit/embedded-cli)
 - **`tools/`**:
-    - `peakrdl`: Customized PeakRDL-cheader generator (Submodule/Fork).
+    - `peakrdl`: Customized PeakRDL-cheader generator (Fork).
 
 ## Quick Start
 
@@ -24,17 +24,20 @@ A modular C/C++ SDK and project template for SoC FW development and HW testing. 
 
 #### 1.1. Workspace setup
 
-Execute the interactive `setup` script from the root directory to initialize your workspace environment:
-
+Prior to initializing your environment, ensure Python 3 is installed on your host system:
 ```text
-    chmod +x /path/to/your/local/EmbedTemplate/setup.py
-    ../EmbedTemplate/setup.py
+    sudo apt update && sudo apt install -y python3
 ```
-For a complete first-time environment installation, use the menu interface to select `Debug Tools`, `ARM Toolchain`, `RISC-V Toolchain`, and `Networking Tools`:
+Execute the interactive `workspace_setup.py` script from the root directory to initialize your workspace environment:
+```text
+    chmod +x /path/to/your/local/EmbedTemplate/workspace_setup.py
+    ../EmbedTemplate/workspace_setup.py
+```
+For a complete first-time environment installation, use the menu interface to select `ARM Toolchain`, `RISC-V Toolchain`, `PCIe Co-Simulation Networking` and `Debug Tools`:
 
 <img src="images/setup-workspace.png" alt="App Dashboard" width="75%">
 
-This installs QEMU, Verilator and libvfio-user.
+This installs QEMU, TFA, FreeRTOS as well as ARM and RISC-V toolchains, vfio-user packet sniffer and GDB.
 
 #### 1.2. Optional Renode HW Simulator
 To install the `Renode HW Simulator`, download the appropriate package for your host from `https://builds.renode.io/`. For Ubuntu/Debian, you can download and install the latest stable release using:
@@ -43,24 +46,22 @@ To install the `Renode HW Simulator`, download the appropriate package for your 
    sudo apt install -y mono-complete libgtk2.0-0 libgtk-3-0
    sudo apt install ./renode_1.16.1_amd64.deb
 ```
-### 2. Initialization
+#### 1.2.1. Initialization
 
-If you just cloned this repository, initialize the submodules:
-
- ~~~bash
+If you just cloned this repository, initialize the Renode submodules:
+```text
     git submodule update --init --recursive
- ~~~
+```
+### 2. Miscellaneous
 
-and for code development, install the pre-commit hook:
-
- ~~~bash
+For code development, install the pre-commit hook:
+```text
     pre-commit install
- ~~~
+```
 
 ### 3. Build and Run
 
 Execute the `launch_runner` automation script to compile and launch your target chip firmware inside the QEMU:
-
 ```text
 chmod +x /path/to/your/local/EmbedTemplate/launch_runner.py
 ./launch_runner.py -h
@@ -84,18 +85,12 @@ To build and launch standard target firmware (e.g., STM32F4), run:
 ```
 <img src="images/launch-stm32f4.png" alt="App Dashboard" width="75%">
 
+You can build and run RISC-V targets in the same way, and multiple targets can be run simultaneously.
+
 ### 3.1. Co-Simulation Build (x86-virt)
 
- - **Target: Embedded x86 (X86_VIRT)**:
-By default, the `x86-virt` target requires an active `PCIe Co-Simulation Bridge` connection. Alternatively, you can build with --opt="-DENABLE_PCI=False". You must launch the PCIe agent in a separate terminal window **prior** to launching `x86-virt`:
+To build and launch the `x86-virt` target with vfio-user packet sniffing and the GDB debugger run:
 ```text
-    # Terminal 1: Initialize the PCIe Co-Simulation Agent
-    ../PcieCosim/run_pcie_agent.py --bridge --verbose
-```
-<img src="images/launch-pcie-cosim-bridge.png" alt="App Dashboard" width="75%">
-
-```text
-    # Terminal 2: Build and launch the x86-virt target with vfio-user packet sniffing and GDB debugger
     ../EmbedTemplate/launch_runner.py --build --chip x86-virt --debug --sniffer
 ```
 <img src="images/launch-x86-virt-gdb-pkt-snif-1.png" alt="App Dashboard" width="75%">
