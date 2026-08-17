@@ -708,12 +708,10 @@ def main():
 
     verify_project_symlinks(project_root_dir, resolved_tools_dir, resolved_bsp_dir, resolved_os_dir, selected_ids)
 
+    configure_x11_resources()
     if "networking" in selected_ids:
         configure_wireshark_permissions()
         configure_vfio_user_dissector(project_root_dir)
-
-    if "networking" in selected_ids or "debug" in selected_ids:
-        configure_x11_resources()
 
     print("[+] Setup completed")
 

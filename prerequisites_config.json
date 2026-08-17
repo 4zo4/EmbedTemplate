@@ -26,7 +26,10 @@
       "libc6-dev-i386",
       "python3-pexpect",
       "python3-bpfcc",
-      "bpfcc-tools"
+      "bpfcc-tools",
+      "socat",
+      "xterm",
+      "x11-xserver-utils"
     ],
     "repos": [
       { "path": "qemu/qemu", "id": "qemu", "type": "tools", "tag": "v11.1.0", "clone_depth": 1 },
@@ -53,14 +56,14 @@
       "id": "networking",
       "name": "PCIe Co-Simulation Networking",
       "description": "Packet inspection tools, socket utilities, and virtualization interface dependencies",
-      "packages": ["tshark", "lsof", "telnet", "socat", "wireshark", "xterm", "x11-xserver-utils"],
+      "packages": ["tshark", "lsof", "wireshark" ],
       "repos": []
     },
     {
       "id": "debug",
       "name": "Debug Tools",
       "description": "Cross-architecture debugging utilities",
-      "packages": ["gdb-multiarch", "xterm", "x11-xserver-utils"],
+      "packages": ["gdb-multiarch"],
       "repos": []
     },
     {
