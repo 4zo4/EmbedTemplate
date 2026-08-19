@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
+#
+# Copyright (c) 2026, Purple
+# This file is licensed under the MIT License.
+#
 import argparse
 import glob
+import json
 import os
 from pathlib import Path
 import sys
@@ -17,6 +22,18 @@ from tools.net.vfio_user_pkt_sniffer import (
     start_vfio_user_pkt_sniffer,
     stop_vfio_user_pkt_sniffer,
 )
+
+def load_json(path):
+    if not os.path.exists(path):
+        return None
+
+    with open(path, "r") as f:
+        try:
+            return json.load(f)
+        except json.JSONDecodeError as e:
+            print(f"[⚠️] Error: Failed to parse '{path}'")
+            print(f"[⚠️] {path}:{e.lineno}:{e.colno}: {e.msg}")
+            sys.exit(1)
 
 def resolve_target_paths(target_chip, image_name):
     """Locate target firmware artifacts."""
@@ -153,6 +170,40 @@ def start_pcie_cosim_bridge():
 
 def main():
     agent_id = os.getpid()
+    config_state = load_json(".configs.json")
+    config_meta = None
+
+    if config_state:
+        config_meta = config_state.get("meta", {})
+        config_repos = config_meta.get("repos", []) + config_meta.get("selected_repos", [])
+        config_scopes = config_meta.get("selected_scopes", [])
+    else:
+        print("\033[91m[Agent] Fatal: Workspace not initialized. Please run 'workspace_setup.py' to setup workspace.\033[0m")
+        sys.exit(1)
+
+    enable_arm = False
+    enable_net = False
+    enable_dbg = False
+    enable_riscv = False
+
+    if not "qemu" in config_repos:
+        print("\033[91m[Agent] Fatal: QEMU not installed.\033[0m")
+        sys.exit(1)
+
+    arm_chips = []
+    riscv_chips = []
+
+    if "riscv_toolchain" in config_scopes:
+        riscv_chips = ["gd32vf103", "gd32vf103-virt"]
+        enable_riscv = True
+    if "arm_toolchain" in config_scopes:
+        arm_chips = ["stm32f4", "cortex-a9-virt"]
+        enable_arm = True
+    if "networking" in config_scopes:
+        enable_net = True
+    if "debug" in config_scopes:
+        enable_dbg = True
+
     parser = argparse.ArgumentParser(description="Simulation Framework Agent")
     parser.add_argument(
         "--build",
@@ -161,25 +212,32 @@ def main():
     )
     parser.add_argument(
         "--opt",
-        help='Build options for target chip firmware. Example: --opt="-DENABLE_PCI=False"'
+        help='Build options for target chip firmware. Example: --opt="-DENABLE_PCI=True"'
     )
     parser.add_argument(
         "--verbose", action="store_true",
         help="Enable verbose build output"
     )
+    chips = arm_chips + riscv_chips + ["x86-virt", "x86_64"]
     parser.add_argument(
-        "--chip", choices=["stm32f4", "gd32vf103", "gd32vf103-virt", "cortex-a9-virt", "x86-virt", "x86_64"], default="stm32f4",
-        help="Specify the target chip (default: stm32f4)"
+        "--chip", choices=chips,
+        help="Specify the target chip"
     )
-    parser.add_argument(
-        "--debug", action="store_true",
-        help="Enable GDB server on port 1234 and stop guest CPU at startup"
-    )
-    parser.add_argument(
-        "--sniffer", action="store_true",
-        help="Launch packet sniffer to capture QEMU vfio-user traffic"
-    )
+    if enable_dbg:
+        parser.add_argument(
+            "--debug", action="store_true",
+            help="Enable GDB server and stop guest CPU at startup"
+        )
+    if enable_net:
+        parser.add_argument(
+            "--sniffer", action="store_true",
+            help="Launch packet sniffer to capture QEMU vfio-user traffic"
+        )
     args = parser.parse_args()
+
+    if args.chip == None:
+        print("\033[91m[Agent] Error: Specify the target chip.\033[0m")
+        sys.exit(1)
 
     if args.build:
         compile_firmware(args.chip, args.opt, args.verbose)
@@ -196,10 +254,10 @@ def main():
         sys.exit(0)
 
     arch = None
-    if args.chip in ["gd32vf103", "gd32vf103-virt"]:
-        arch = "riscv"
-    elif args.chip in ["stm32f4", "cortex-a9-virt"]:
+    if args.chip in arm_chips:
         arch = "arm"
+    elif args.chip in riscv_chips:
+        arch = "riscv"
     elif args.chip == "x86-virt":
         arch = "i386:x86-64"
 
@@ -291,7 +349,7 @@ def main():
         print(f"\033[91m[Agent] Fatal: Unsupported architecture/CPU pairing specified\033[0m")
         sys.exit(1)
 
-    if args.debug:
+    if enable_dbg and args.debug:
         qemu_args.extend(["-gdb", f"unix:{gdb_sock},server=on,wait=off", "-S"])
 
     gdb_proc = None
@@ -339,7 +397,7 @@ def main():
         socat_proc = subprocess.Popen(socat_cmd, env=current_env)
         time.sleep(0.5) # Let socat connect and unblock QEMU
 
-        if args.debug:
+        if enable_dbg and args.debug:
             print("\033[92m[Agent] Spawning Terminal for Debugging (gdb)...\033[0m")
 
             gdb_commands = (

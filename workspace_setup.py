@@ -1,14 +1,30 @@
 #!/usr/bin/env python3
-
+#
+# Copyright (c) 2026, Purple
+# This file is licensed under the MIT License.
+#
+import argparse
 from getpass import getpass
 import grp
 import glob
 import json
 import os
+from pathlib import Path
 import re
 import shutil
 import subprocess
 import sys
+
+def format_repo_info(repo):
+    """Helper to generate bracketed repo info: (version x, branch y)."""
+    repo_info = []
+
+    if repo.get("tag"):
+        repo_info.append(f"version {repo['tag']}")
+    if repo.get("branch"):
+        repo_info.append(f"branch {repo['branch']}")
+
+    return f" ({', '.join(repo_info)})" if repo_info else ""
 
 def print_workspace_manifest(blueprint):
     """Parse and print the structural components declared in the blueprint."""
@@ -19,8 +35,10 @@ def print_workspace_manifest(blueprint):
         print("[📦 Mandatory Repositories]:")
         for repo in repos:
             dir = repo.get("dir") or repo["path"].split("/")[-1]
-            branch_info = f" (branch: {repo['branch']})" if repo.get("branch") else ""
-            print(f"  • {dir} -> {repo['path']}{branch_info}")
+            version_info = f" version: {repo['tag']}" if repo.get("tag") else ""
+            branch_info = f" branch: {repo['branch']}" if repo.get("branch") else ""
+            repo_info = format_repo_info(repo)
+            print(f"  • {dir} -> {repo['path']}{repo_info}")
 
     scopes = blueprint.get("scopes", [])
     if scopes:
@@ -45,7 +63,7 @@ def install_system_packages(package_list):
         subprocess.run(["sudo", "-E", "apt", "install", "-y"] + package_list, env=env, check=True)
         return True
     except subprocess.CalledProcessError as e:
-        print(f"[⚠️] Native package manager reported a failure: {e}")
+        print(f"[⚠️] Package manager reported a failure: {e}")
         return False
 
 try:
@@ -68,7 +86,7 @@ def load_json(path):
         try:
             return json.load(f)
         except json.JSONDecodeError as e:
-            print(f"[⚠️] ERROR: Failed to parse '{path}'")
+            print(f"[⚠️] Error: Failed to parse '{path}'")
             print(f"[⚠️] {path}:{e.lineno}:{e.colno}: {e.msg}")
             sys.exit(1)
 
@@ -93,8 +111,8 @@ def get_qemu_dirs():
         qemu_dirs.append("/usr/local/bin")
     return qemu_dirs
 
-def remove_qemu_distro(repo_path):
-    """Remove QEMU distro from the host."""
+def uninstall_qemu_distro(repo_path):
+    """Uninstall QEMU distro from the host."""
     build_dir = os.path.join(repo_path, "build")
     install_log = os.path.join(build_dir, "meson-logs", "install-log.txt")
 
@@ -161,7 +179,7 @@ def remove_qemu_distro(repo_path):
             subprocess.run(["sudo", "rm", "-f", icon], check=True)
         except subprocess.CalledProcessError:
             pass
-    print("[✓ Success] QEMU distro removed from host system")
+    print("[✓ Success] QEMU distro uninstalled from host system")
 
 def get_qemu_system_x86_64_version():
     """Retrieve the installed qemu-system-x86_64 version."""
@@ -217,7 +235,6 @@ def check_upstream_update(repo_path, tag):
     """Query remote to notify users if a newer version exists."""
     if not tag:
         return
-
     try:
         res = subprocess.run(
             ["git", "ls-remote", "--tags", "origin"],
@@ -264,9 +281,8 @@ def configure_vfio_user_dissector(project_root_dir):
 
     try:
         os.makedirs(target_plugin_dir, exist_ok=True)
-        import shutil
         shutil.copy2(source_lua, target_lua)
-        print(f"[✓ Success] Wireshark 'vfio-user' packet dissector activated at {target_lua}!")
+        print(f"[✓ Success] Wireshark 'vfio-user' packet dissector activated at {target_lua}")
     except Exception as e:
         print(f"[⚠️] Failed to mirror plugin binary script asset: {e}")
 
@@ -396,7 +412,7 @@ def build_repo(repo_name, repo_path, tag = None):
             return
         else:
             if get_qemu_dirs():
-                remove_qemu_distro(repo_path)
+                uninstall_qemu_distro(repo_path)
             print("[!] QEMU status: Initiating build recipe...")
     else:
         return
@@ -447,7 +463,7 @@ def build_repo(repo_name, repo_path, tag = None):
             else:
                 print(f"[⚠️] Warning: QEMU version mismatch! Expected: {expected_ver} | Found: {qemu_ver}")
 
-            print(f"[✓ Success] Finished compiling {repo_name}!")
+            print(f"[✓ Success] Finished compiling {repo_name}")
         except subprocess.CalledProcessError as e:
             print(f"[🗙 Error] Compilation failed for {repo_name}: {e}")
 
@@ -520,6 +536,95 @@ def configure_x11_resources():
         f.write(f"{target_line}")
     print("[✓ Success] X11 startup rules appended to configuration profile")
 
+def remove_components(target, blueprint, config_state):
+    """ Remove installed components """
+    remove_all = (target == "all")
+    remove_repos = []
+    remove_packages = []
+    remove_scope_ids = []
+
+    config_meta = config_state.get("meta", {})
+    installed_repo_ids = config_meta.get("repos", []) + config_meta.get("selected_repos", [])
+    installed_scope_ids = config_meta.get("selected_scopes", [])
+    installed_repos = config_state.get("repos", [])
+    blueprint_scopes = blueprint.get("scopes", [])
+
+    if remove_all:
+        remove_repos = installed_repos
+        for scope in blueprint_scopes:
+            if scope["id"] in installed_scope_ids:
+                remove_packages.extend(scope.get("packages", []))
+        remove_scope_ids = installed_scope_ids
+    else:
+        for scope in blueprint_scopes:
+            if scope["id"] == target and scope["id"] in installed_scope_ids:
+                remove_packages.extend(scope.get("packages", []))
+                remove_scope_ids.append(target)
+
+        for repo in installed_repos:
+            repo_id = repo.get("id")
+            if target == repo_id and repo_id in installed_repo_ids:
+                remove_repos.append(repo)
+
+    for repo in remove_repos:
+        repo_id = repo.get("id")
+        if repo_id == "qemu":
+            rdir = Path(repo.get("rdir", ""))
+            qemu_path = rdir / "qemu"
+            uninstall_qemu_distro(str(qemu_path))
+
+    if remove_packages:
+        print(f"[Agent] Purging system packages: {', '.join(remove_packages)}")
+        try:
+            subprocess.run(["sudo", "apt-get", "purge", "-y"] + remove_packages, check=True)
+            subprocess.run(["sudo", "apt-get", "autoremove", "-y"], check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"[⚠️] Error: Package purging: {e}")
+
+    for repo in remove_repos:
+        dir = repo.get("dir") or Path(repo["path"]).name
+        rdir = Path(repo.get("rdir"))
+        repo_path = rdir / dir
+
+        if repo_path.exists() and repo_path.is_dir():
+            try:
+                shutil.rmtree(repo_path)
+            except Exception as e:
+                print(f"[🗙 Error] Failed to remove {repo_path}: {e}")
+
+    config_file_path = Path(".configs.json")
+    if remove_all:
+        try:
+            config_file_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+    else:
+        for scope in remove_scope_ids:
+            if scope in config_meta.get("selected_scopes", []):
+                config_state["meta"]["selected_scopes"].remove(scope)
+
+        if "packages" in config_state:
+            for package in remove_packages:
+                config_state["packages"].remove(package)
+
+        for repo in remove_repos:
+            repo_id = repo.get("id")
+            if repo_id in config_meta.get("repos", []):
+                config_state["meta"]["repos"].remove(repo_id)
+            if repo_id in config_meta.get("selected_repos", []):
+                config_state["meta"]["selected_repos"].remove(repo_id)
+            if repo in config_state["repos"]:
+                config_state["repos"].remove(repo)
+        try:
+            config_file_path.write_text(json.dumps(config_state, indent=2))
+        except Exception as e:
+            print(f"[🗙 Error] Failed to update '.configs.json': {e}")
+
+    if target == "all":
+        print("[✓ Success] Workspace reset. '.configs.json' purged")
+    else:
+        print(f"[✓ Success] '{target}' removed from host system")
+
 def main():
     project_root_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -527,6 +632,44 @@ def main():
     if not blueprint:
         print("[⚠️] Error: 'prerequisites_config.json' missing from root directory.")
         sys.exit(1)
+    base_requirements = blueprint.get("base_requirements", {})
+
+    config_state = load_json(".configs.json")
+    config_meta = None
+    parser = argparse.ArgumentParser(description="Workspace Setup Utility (run without args for update menu)")
+
+    enable_uninstall = False
+    if config_state:
+        config_meta = config_state.get("meta", {})
+        config_repos = config_meta.get("repos", []) + config_meta.get("selected_repos", [])
+        config_scopes = config_meta.get("selected_scopes", [])
+        if get_qemu_dirs():
+            enable_uninstall = True
+            parser.add_argument(
+                "--uninstall", choices={"qemu"},
+                help="Uninstall component."
+            )
+        parser.add_argument(
+            "--remove", choices=["all"] + sorted(config_repos + config_scopes),
+            help="Remove repository and packages."
+        )
+    else:
+        parser.add_argument(
+            "--setup", action="store_true",
+            help="Initialize workspace. You can ignore this choice to setup workspace."
+        )
+    args = parser.parse_args()
+
+    if config_state:
+        if enable_uninstall and args.uninstall == "qemu":
+            tools_dir = config_meta.get("clone_tools_directory")
+            qemu_path = os.path.join(tools_dir, "qemu")
+            uninstall_qemu_distro(qemu_path)
+            sys.exit(0)
+        if args.remove:
+            print(f"[🌲 Agent] Removing {args.remove}...")
+            remove_components(args.remove, blueprint, config_state)
+            sys.exit(0)
 
     print_workspace_manifest(blueprint)
 
@@ -539,68 +682,97 @@ def main():
     resolved_os_dir = os.path.abspath(os.path.expanduser(default_os_dir))
     resolved_bsp_dir = os.path.abspath(os.path.expanduser(default_bsp_dir))
 
-    previous_state = load_json("configs.json")
-    past_scopes = []
-    past_tools_dir = default_tools_dir
-    past_os_dir = default_os_dir
-    past_bsp_dir = default_bsp_dir
+    config_repos = []               # previously selected repos
+    config_selections = []          # union of previous menu selections
+    config_repo_selections = []     # union of previous menu repo selections
+    config_scope_selections = []    # union of previous menu scope selections
+    config_tools_dir = default_tools_dir
+    config_os_dir = default_os_dir
+    config_bsp_dir = default_bsp_dir
 
-    if previous_state:
-        print("[+] Existing configurations from 'configs.json' are marked for the default setup")
-        past_scopes = previous_state.get("meta", {}).get("selected_scopes", [])
-        past_tools_dir = previous_state.get("meta", {}).get("clone_tools_directory", default_tools_dir)
-        past_os_dir = previous_state.get("meta", {}).get("clone_os_directory", default_os_dir)
-        past_bsp_dir = previous_state.get("meta", {}).get("clone_bsp_directory", default_bsp_dir)
+    if config_state:
+        print("[+] Configurations from '.configs.json' are marked for the default setup")
+        config_repo_selections = config_meta.get("selected_repos", [])
+        config_scope_selections = config_meta.get("selected_scopes", [])
+        config_selections = config_repo_selections + config_scope_selections
+        if config_repo_selections:
+            for repo in config_state["repos"]:
+                repo_id = repo.get("id")
+                if repo_id in config_repo_selections:
+                    config_repos.append(repo)
+        config_os_dir = config_meta.get("clone_os_directory", default_os_dir)
+        config_bsp_dir = config_meta.get("clone_bsp_directory", default_bsp_dir)
+        config_tools_dir = config_meta.get("clone_tools_directory", default_tools_dir)
 
-        resolved_tools_dir = os.path.abspath(os.path.expanduser(past_tools_dir))
-        resolved_os_dir = os.path.abspath(os.path.expanduser(past_os_dir))
-        resolved_bsp_dir = os.path.abspath(os.path.expanduser(past_bsp_dir))
+        resolved_os_dir = os.path.abspath(os.path.expanduser(config_os_dir))
+        resolved_bsp_dir = os.path.abspath(os.path.expanduser(config_bsp_dir))
+        resolved_tools_dir = os.path.abspath(os.path.expanduser(config_tools_dir))
 
     scopes = blueprint.get("scopes", [])
-    menu_choices = [Choice(name=s["name"], value=s, enabled=(s["id"] in past_scopes)) for s in scopes]
+    menu_choices = [Choice(name=s["name"], value=s, enabled=(s["id"] in config_selections)) for s in scopes]
 
-    selected_scopes = inquirer.checkbox(
+    selections = inquirer.checkbox(
         message="Select installation options:\nUse SPACE to select, ARROW KEYS to navigate, and ENTER to confirm selection",
         choices=menu_choices,
     ).execute()
 
-    selected_ids = [scope["id"] for scope in selected_scopes]
+    selected_scope_ids = [selection["id"] for selection in selections]
+    selected_repos = []
+    selected_repo_ids = []
 
-    all_active_repos = blueprint.get("base_requirements", {}).get("repos", [])
-    for scope in selected_scopes:
-        all_active_repos += scope.get("repos", [])
+    repos = base_requirements.get("repos", [])
+    for repo in selections:
+        selected_repos += repo.get("repos", [])
+    for repo in selected_repos:
+        repo_id = repo.get("id")
+        selected_repo_ids.append(repo_id)
+        selected_scope_ids.remove(repo_id)
 
-    if any(r.get("type") == "os" for r in all_active_repos):
-        os_input = inquirer.text(
-            message="Specify absolute path to operating system repositories:",
-            default=past_os_dir,
-        ).execute()
-        resolved_os_dir = os.path.abspath(os.path.expanduser(os_input.strip() if os_input.strip() else past_os_dir))
+    optional_repo_ids = set()
+    for repo in (selected_repos + config_repos):
+        repo_id = repo.get("id")
+        if repo_id and repo_id not in optional_repo_ids:
+            repos.append(repo)
+            optional_repo_ids.add(repo_id)
 
-    if any(r.get("type") == "bsp" for r in all_active_repos):
-        bsp_input = inquirer.text(
-            message="Specify absolute path to board support package repositories:",
-            default=past_bsp_dir,
-        ).execute()
-        resolved_bsp_dir = os.path.abspath(os.path.expanduser(bsp_input.strip() if bsp_input.strip() else past_bsp_dir))
+    selected_repo_ids = list(set(selected_repo_ids) | set(config_repo_selections))
+    selected_scope_ids = list(set(selected_scope_ids) | set(config_scope_selections))
+    selected_ids = selected_repo_ids + selected_scope_ids
 
-    if "peakrdl" in selected_ids:
-        tools_input = inquirer.text(
-            message="Specify absolute path to tools repositories:",
-            default=past_tools_dir,
-        ).execute()
-        resolved_tools_dir = os.path.abspath(os.path.expanduser(tools_input.strip() if tools_input.strip() else past_tools_dir))
+    if not config_state:
+        if any(r.get("type") == "os" for r in repos):
+            os_input = inquirer.text(
+                message="Specify absolute path to operating system repositories:",
+                default=config_os_dir,
+            ).execute()
+            resolved_os_dir = os.path.abspath(os.path.expanduser(os_input.strip() if os_input.strip() else config_os_dir))
 
-    final_packages = set(blueprint.get("base_requirements", {}).get("packages", []))
+        if any(r.get("type") == "bsp" for r in repos):
+            bsp_input = inquirer.text(
+                message="Specify absolute path to board support package repositories:",
+                default=config_bsp_dir,
+            ).execute()
+            resolved_bsp_dir = os.path.abspath(os.path.expanduser(bsp_input.strip() if bsp_input.strip() else config_bsp_dir))
+
+        if any(r.get("type") == "tools" for r in repos):
+            tools_input = inquirer.text(
+                message="Specify absolute path to tools repositories:",
+                default=config_tools_dir,
+            ).execute()
+            resolved_tools_dir = os.path.abspath(os.path.expanduser(tools_input.strip() if tools_input.strip() else config_tools_dir))
+
+    resolved_dirs = {"os": resolved_os_dir, "bsp": resolved_bsp_dir, "tools": resolved_tools_dir}
+    final_packages = set(base_requirements.get("packages", []))
     final_repos = {}
     repo_ids = []
 
     def add_repos(repo_list):
         for r_entry in repo_list:
-            r_path = r_entry["path"]
-            r_id = r_entry.get("id")
+            r_id = r_entry["id"]        # mandatory entry
+            r_path = r_entry["path"]    # mandatory entry
             r_type = r_entry.get("type")
             r_dir = r_entry.get("dir")
+            r_rdir = r_entry.get("rdir") or resolved_dirs.get(r_type)
             r_tag = r_entry.get("tag")
             r_branch = r_entry.get("branch")
             r_depth = r_entry.get("clone_depth")
@@ -609,29 +781,19 @@ def main():
             if r_id and r_id not in selected_ids:
                 repo_ids.append(r_id)
 
-            if r_type == "os":
-                r_repos_dir = resolved_os_dir
-            elif r_type == "bsp":
-                r_repos_dir = resolved_bsp_dir
-            elif r_type == "tools":
-                r_repos_dir = resolved_tools_dir
-            else:
-                r_repos_dir = None
-
             final_repos[r_path] = {
-                "id": r_id,           # optional unique identifier for the repository (if specified)
-                "dir": r_dir,         # clone destination directory name (if specified), otherwise defaults to repo name
-                "rdir": r_repos_dir,  # clone destination base/root directory based on type (os, bsp, tools)
-                "tag": r_tag,         # optional tag reference to align the repository to
-                "branch": r_branch,   # optional branch reference to align the repository to
-                "depth": r_depth,     # optional clone depth for shallow clones (if specified)
-                "url": r_url          # optional upstream URL for the repository (if specified, overrides default GitHub URL)
+                "id": r_id,         # unique identifier for the repository
+                "dir": r_dir,       # clone destination directory name (if specified), otherwise defaults to repo name
+                "rdir": r_rdir,     # clone destination base/root directory based on type (os, bsp, tools)
+                "tag": r_tag,       # optional tag reference to align the repository to
+                "branch": r_branch, # optional branch reference to align the repository to
+                "depth": r_depth,   # optional clone depth for shallow clones (if specified)
+                "url": r_url        # optional upstream URL for the repository (if specified, overrides default GitHub URL)
             }
-    add_repos(blueprint.get("base_requirements", {}).get("repos", []))
+    add_repos(repos)
 
-    for scope in selected_scopes:
-        final_packages.update(scope.get("packages", []))
-        add_repos(scope.get("repos", []))
+    for selection in selections:
+        final_packages.update(selection.get("packages", []))
 
     compiled_config = {
         "meta": {
@@ -639,7 +801,8 @@ def main():
             "clone_os_directory": resolved_os_dir,
             "clone_bsp_directory": resolved_bsp_dir,
             "repos": sorted(repo_ids),
-            "selected_scopes": selected_ids,
+            "selected_repos": sorted(selected_repo_ids),
+            "selected_scopes": sorted(selected_scope_ids),
         },
         "packages": sorted(list(final_packages)),
         "repos": [
@@ -657,7 +820,7 @@ def main():
         ],
     }
 
-    with open("configs.json", "w") as f:
+    with open(".configs.json", "w") as f:
         json.dump(compiled_config, f, indent=2)
 
     print("Verifying Local Package System State...")
@@ -666,7 +829,7 @@ def main():
     if packages_to_install:
         print(f"[+] Missing dependencies detected: {', '.join(packages_to_install)}")
         if not install_system_packages(packages_to_install):
-            print("[⚠️] Native Package alignment halted due to execution errors")
+            print("[⚠️] Package alignment halted due to execution errors")
         else:
             print("[+] Compilation dependency tools are available")
 
@@ -674,7 +837,7 @@ def main():
 
     for repo_entry in compiled_config["repos"]:
         repo = repo_entry["path"]
-        repo_id = repo_entry.get("id")
+        repo_id = repo_entry["id"]
         repo_dir = repo_entry["dir"]
         repo_root_dir = repo_entry["rdir"]
 
@@ -709,7 +872,7 @@ def main():
     verify_project_symlinks(project_root_dir, resolved_tools_dir, resolved_bsp_dir, resolved_os_dir, selected_ids)
 
     configure_x11_resources()
-    if "networking" in selected_ids:
+    if "networking" in selected_scope_ids:
         configure_wireshark_permissions()
         configure_vfio_user_dissector(project_root_dir)
 

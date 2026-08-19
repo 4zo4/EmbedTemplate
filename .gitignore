@@ -1,5 +1,5 @@
 # Prerequisites
-configs.json
+.configs.json
 *.swp
 # Python Artifacts
 __pycache__/
