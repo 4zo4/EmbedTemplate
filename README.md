@@ -46,7 +46,7 @@ To install the `Renode HW Simulator`, download the appropriate package for your 
    sudo apt install -y mono-complete libgtk2.0-0 libgtk-3-0
    sudo apt install ./renode_1.16.1_amd64.deb
 ```
-#### 1.2.1. Initialization
+#### 1.2.1. Renode Support Initialization
 
 If you just cloned this repository, initialize the Renode submodules:
 ```text
@@ -54,6 +54,13 @@ If you just cloned this repository, initialize the Renode submodules:
 ```
 ### 2. Miscellaneous
 
+#### 2.1. Uninstall, purge, or remove component
+
+Use the `workspace_setup.py` script to uninstall, purge, or remove project-specific components:
+
+<img src="images/embed_template_workspace_setup_help.png" alt="App Dashboard" width="75%">
+
+#### 2.2. Pre-commit
 For code development, install the pre-commit hook:
 ```text
     pre-commit install
@@ -65,16 +72,17 @@ Execute the `launch_runner` automation script to compile and launch your target 
 ```text
 chmod +x /path/to/your/local/EmbedTemplate/launch_runner.py
 ./launch_runner.py -h
-usage: launch_runner.py [-h] [--build] [--opt OPT] [--verbose] [--chip {stm32f4,gd32vf103,gd32vf103-virt,cortex-a9-virt,x86-virt,x86_64}] [--debug] [--sniffer]
+usage: launch_runner.py [-h] [--build] [--opt OPT] [--verbose] [--chip {stm32f4,cortex-a9-virt,gd32vf103,gd32vf103-virt,x86-virt,x86_64}]
+                        [--debug] [--sniffer]
 Simulation Framework Agent
 options:
   -h, --help            show this help message and exit
   --build               Build target chip firmware before launch. Select --chip to build its firmware.
   --opt OPT             Build options for target chip firmware. Example: --opt="-DENABLE_PCI=True"
   --verbose             Enable verbose build output
-  --chip {stm32f4,gd32vf103,gd32vf103-virt,cortex-a9-virt,x86-virt,x86_64}
-                        Specify the target chip (default: stm32f4)
-  --debug               Enable GDB server on port 1234 and stop guest CPU at startup
+  --chip {stm32f4,cortex-a9-virt,gd32vf103,gd32vf103-virt,x86-virt,x86_64}
+                        Specify the target chip
+  --debug               Enable GDB server and stop guest CPU at startup
   --sniffer             Launch packet sniffer to capture QEMU vfio-user traffic
 ```
 
