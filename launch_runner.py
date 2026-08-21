@@ -171,38 +171,27 @@ def start_pcie_cosim_bridge():
 def main():
     agent_id = os.getpid()
     config_state = load_json(".configs.json")
-    config_meta = None
 
     if config_state:
         config_meta = config_state.get("meta", {})
-        config_repos = config_meta.get("repos", []) + config_meta.get("selected_repos", [])
         config_scopes = config_meta.get("selected_scopes", [])
     else:
         print("\033[91m[Agent] Fatal: Workspace not initialized. Please run 'workspace_setup.py' to setup workspace.\033[0m")
         sys.exit(1)
 
-    enable_arm = False
-    enable_net = False
-    enable_dbg = False
-    enable_riscv = False
-
-    if not "qemu" in config_repos:
-        print("\033[91m[Agent] Fatal: QEMU not installed.\033[0m")
-        sys.exit(1)
-
     arm_chips = []
     riscv_chips = []
 
-    if "riscv_toolchain" in config_scopes:
-        riscv_chips = ["gd32vf103", "gd32vf103-virt"]
-        enable_riscv = True
-    if "arm_toolchain" in config_scopes:
+    enable_arm = "arm_toolchain" in config_scopes
+    enable_riscv = "riscv_toolchain" in config_scopes
+
+    if enable_arm:
         arm_chips = ["stm32f4", "cortex-a9-virt"]
-        enable_arm = True
-    if "networking" in config_scopes:
-        enable_net = True
-    if "debug" in config_scopes:
-        enable_dbg = True
+    if enable_riscv:
+        riscv_chips = ["gd32vf103", "gd32vf103-virt"]
+
+    enable_dbg = "debug" in config_scopes
+    enable_net = "networking" in config_scopes
 
     parser = argparse.ArgumentParser(description="Simulation Framework Agent")
     parser.add_argument(
@@ -329,7 +318,7 @@ def main():
                     if not vfio_user_sock.exists():
                         print(f"\033[91m[Agent] Fatal: PCI-Bridge failed to initialize. UDS '{vfio_user_sock}' not found.\033[0m")
                         sys.exit(1)
-                    if args.sniffer:
+                    if enable_net and args.sniffer:
                         project_root_abs, log_dir, pcap_file_path, slog_file_path = resolve_absolute_paths()
                         setup_log_directory(log_dir, pcap_file_path, slog_file_path, max_backups=2)
                         sniffer_proc = start_vfio_user_pkt_sniffer(
@@ -512,7 +501,6 @@ def main():
                 gdb_script.unlink(missing_ok=True)
             except Exception:
                 pass
-
 
         print("[Agent] Teardown complete.")
 
