@@ -24,12 +24,13 @@
       "libcmocka-dev",
       "gcc-multilib",
       "libc6-dev-i386",
-      "python3-pexpect",
-      "python3-bpfcc",
-      "bpfcc-tools",
+      "python3-venv",
+      "python3-pip",
       "socat",
       "xterm",
-      "x11-xserver-utils"
+      "x11-xserver-utils",
+      "xfonts-base",
+      "xfonts-utils"
     ],
     "repos": [
       { "path": "qemu/qemu", "id": "qemu", "type": "tools", "tag": "v11.1.0", "clone_depth": 1 },
@@ -56,7 +57,7 @@
       "id": "networking",
       "name": "PCIe Co-Simulation Networking",
       "description": "Packet inspection tools, socket utilities, and virtualization interface dependencies",
-      "packages": ["tshark", "lsof", "wireshark" ],
+      "packages": ["tshark", "lsof", "wireshark", "python3-bpfcc", "bpfcc-tools"],
       "repos": []
     },
     {

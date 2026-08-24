@@ -395,12 +395,14 @@ def main():
             )
             gdb_script_path = Path(project_root) / "build" / f".gdb_init_agent_{agent_id}"
             gdb_script_path.write_text(gdb_commands)
+            gdb_env = current_env.copy() if current_env else os.environ.copy()
+            gdb_env["DEBUGINFOD_URLS"] = ""
 
             gdb_cmd = [
                 "xterm", "-hold", "-title", f"Agent {agent_id} GDB Target {arch}/{args.chip}",
                 "-e", "gdb-multiarch", image_elf, "-x", str(gdb_script_path)
             ]
-            gdb_proc = subprocess.Popen(gdb_cmd, env=current_env)
+            gdb_proc = subprocess.Popen(gdb_cmd, env=gdb_env)
             print(f"\033[95m[Agent] Debug mode active. GDB stub listening on UDS '{gdb_sock}'. CPU frozen at entry point.\033[0m")
 
         print("\033[94m[Agent] Press 'Ctrl + ]' to exit.\033[0m")

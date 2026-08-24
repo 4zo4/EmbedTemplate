@@ -7,6 +7,7 @@ import argparse
 from getpass import getpass
 import grp
 import glob
+import importlib.metadata
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,10 @@ import re
 import shutil
 import subprocess
 import sys
+from tools.net.vfio_user_pkt_sniffer import (
+    configure_kernel_headers_for_vfio_user_pkt_sniffer,
+    configure_vfio_user_pkt_sniffer_sudo_exemption,
+)
 
 def format_repo_info(repo):
     """Helper to generate bracketed repo info: (version x, branch y)."""
@@ -48,7 +53,11 @@ def print_workspace_manifest(blueprint):
             if scope.get("packages"):
                 print(f"    Packages: {', '.join(scope['packages'])}")
             if scope.get("repos"):
-                scope_repos = [r["dir"] if r.get("dir") else r["path"].split("/")[-1] for r in scope["repos"]]
+                scope_repos = []
+                for repo in scope["repos"]:
+                    repo_dir = repo["dir"] if repo.get("dir") else repo["path"].split("/")[-1]
+                    repo_info = format_repo_info(repo)
+                    scope_repos.append(f"{repo_dir}{repo_info}")
                 print(f"    Repos: {', '.join(scope_repos)}")
 
 def install_system_packages(package_list):
@@ -70,6 +79,12 @@ try:
     from InquirerPy import inquirer
     from InquirerPy.base.control import Choice
 except ModuleNotFoundError:
+    try:
+        import importlib.metadata
+        importlib.metadata.version("InquirerPy")
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+    except importlib.metadata.PackageNotFoundError:
+        pass
 
     if install_system_packages(["python3-inquirerpy"]):
         print("[✓ Success] python3-inquirerpy installed.\n")
@@ -100,6 +115,21 @@ def is_package_installed(package_name):
         )
         return "install ok installed" in result.stdout
     except FileNotFoundError:
+        return False
+
+def install_peakrdl_packages():
+    """Install PeakRDL package."""
+    try:
+        importlib.metadata.version("peakrdl")
+        return True
+    except importlib.metadata.PackageNotFoundError:
+        pass
+    try:
+        subprocess.run([sys.executable, "-m", "pip", "install", "peakrdl",
+                        "--break-system-packages", "--no-warn-script-location"], check=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"[⚠️] Failed to run pip install: {e}")
         return False
 
 def get_qemu_dirs():
@@ -498,10 +528,20 @@ def configure_wireshark_permissions():
             ):
                 capabilities_set = True
 
-        if user_in_group and capabilities_set:
+        if user_in_wireshark and capabilities_set:
             print("[✓ Skipping] Wireshark already configured", flush=True)
             return
 
+        subprocess.run(
+            ["sudo", "debconf-communicate"],
+            input="SET wireshark-common/install-setuid true\n",
+            text=True,
+            check=True
+        )
+        subprocess.run(
+            ["sudo", "dpkg-reconfigure", "-f", "noninteractive", "wireshark-common"],
+            check=True
+        )
         if not wireshark_group:
             print("[→] Creating 'wireshark' system group...")
             subprocess.run(["sudo", "groupadd", "-f", "wireshark"], check=True)
@@ -512,29 +552,34 @@ def configure_wireshark_permissions():
         if os.path.exists("/usr/bin/dumpcap"):
             print("[→] Applying CAP_NET_RAW and CAP_NET_ADMIN capabilities to dumpcap...")
             subprocess.run(["sudo", "setcap", "CAP_NET_RAW+eip CAP_NET_ADMIN+eip", "/usr/bin/dumpcap"], check=True)
-            print("[→] Ensuring executable access on dumpcap...")
+            print("[→] Setting executable access on dumpcap...")
             subprocess.run(["sudo", "chmod", "+x", "/usr/bin/dumpcap"], check=True)
-            print("[✓ Success] Wireshark capture permissions configured! Please log out and back in to apply group changes.")
+            print("[✓ Success] Wireshark capture permissions configured.")
         else:
             print("[⚠️] Warning: /usr/bin/dumpcap not found. Wireshark package might have failed to install.")
     except subprocess.CalledProcessError as e:
         print(f"[⚠️] Failed to configure Wireshark capabilities: {e}")
 
-def configure_x11_resources():
+def configure_x11_resources(project_root):
     """Append the Xresources merge string to the user's .bashrc file."""
     bashrc_path = os.path.expanduser("~/.bashrc")
-    target_line = "xrdb -merge ~/.Xresources\n"
+    target_line = f"\nxrdb -merge {project_root}/tools/net/.Xresources\n"
 
     if os.path.exists(bashrc_path):
         with open(bashrc_path, "r") as f:
             content = f.readlines()
-        if any("xrdb -merge ~/.Xresources" in line for line in content):
+        if any("xrdb -merge" in line and "tools/net/.Xresources" in line for line in content):
             print("[✓ Skipping] '.bashrc' already contains Xresources initialization configuration")
             return
 
     with open(bashrc_path, "a") as f:
         f.write(f"{target_line}")
     print("[✓ Success] X11 startup rules appended to configuration profile")
+
+    try:
+        subprocess.run(["xrdb", "-merge", f"{project_root}/tools/net/.Xresources"], capture_output=True, check=True)
+    except subprocess.CalledProcessError:
+        pass
 
 def remove_components(target, blueprint, config_state):
     """ Remove installed components """
@@ -871,10 +916,19 @@ def main():
 
     verify_project_symlinks(project_root_dir, resolved_tools_dir, resolved_bsp_dir, resolved_os_dir, selected_ids)
 
-    configure_x11_resources()
     if "networking" in selected_scope_ids:
-        configure_wireshark_permissions()
-        configure_vfio_user_dissector(project_root_dir)
+        if os.path.exists("/proc/sys/net/core/bpf_jit_enable"):
+            configure_kernel_headers_for_vfio_user_pkt_sniffer()
+            configure_wireshark_permissions()
+            configure_vfio_user_dissector(project_root_dir)
+            configure_vfio_user_pkt_sniffer_sudo_exemption(project_root_dir)
+        else:
+            print("\033[93m[Agent] Warning: Host kernel eBPF capabilities are disabled. Cannot operate the vfio-user packet sniffer.\033[0m")
+
+    configure_x11_resources(project_root_dir)
+
+    if "peakrdl" in selected_repo_ids:
+        install_peakrdl_packages()
 
     print("[+] Setup completed")
 

@@ -5,10 +5,12 @@
 vfio-user packet sniffer management module.
 """
 import os
+import re
 import time
 import shutil
 import getpass
 import traceback
+import signal
 import subprocess
 from typing import Optional, Tuple
 
@@ -48,6 +50,140 @@ def setup_log_directory(log_dir, pcap_file_path, slog_file_path, max_backups=2):
             shutil.move(target, f"{target}.1")
 
     print(f"[Agent] Rotated historical logs (max backups: {max_backups})", flush=True)
+
+def configure_kernel_headers_for_vfio_user_pkt_sniffer():
+    """Setup BPF kernel headers for multiple distributions."""
+
+    kernel_release = subprocess.check_output(["uname", "-r"]).decode().strip()
+    build_path = f"/lib/modules/{kernel_release}/build"
+
+    if os.path.exists(os.path.join(build_path, "include")):
+        return True
+
+    # Microsoft WSL2
+    if "microsoft" in kernel_release.lower():
+        subprocess.run(["sudo", "mkdir", "-p", f"/lib/modules/{kernel_release}"], check=True)
+        possible_siblings = ["debian", "Ubuntu", "ubuntu"]
+        for distro in possible_siblings:
+            sibling_source = f"/wsl.localhost/{distro}/lib/modules/{kernel_release}/build"
+            if os.path.exists(os.path.join(sibling_source, "include")):
+                subprocess.run(["sudo", "ln", "-sfn", sibling_source, build_path], check=True)
+                print("[!] Established cross-distribution link to kernel headers for kernel release: {kernel_release}")
+                return True
+
+        kheaders_archive = "/sys/kernel/kheaders.tar.xz"
+        if os.path.exists(kheaders_archive):
+            subprocess.run(["sudo", "tar", "-xf", kheaders_archive, "-C", build_path], check=True)
+            print("[!] Kernel headers extracted at {build_path} from archive")
+            return True
+
+        print("[Agent] Reconstructing WSL2 upstream kernel headers from upstream repository archives...")
+        subprocess.run(["sudo", "apt-get", "update"], check=True)
+        subprocess.run(["sudo", "apt-get", "install", "-y", "flex", "bison", "libelf-dev", "libssl-dev", "bc"], check=True)
+
+        version_digits = re.findall(r'\d+', kernel_release)
+        major_minor = f"{version_digits[0]}.{version_digits[1]}" if len(version_digits) >= 2 else "6.6"
+
+        branch = f"linux-msft-wsl-{major_minor}.y"
+        scratch_dir = f"/var/tmp/wsl2_kernel_src_{major_minor}"
+        url = "https://github.com/microsoft/WSL2-Linux-Kernel/"
+
+        if not os.path.exists(scratch_dir):
+            subprocess.run(["git", "clone", "--depth=1", "-b", branch, url, scratch_dir], check=True)
+        else:
+            subprocess.run(["make", "mrproper"], cwd=scratch_dir, check=True)
+
+        subprocess.run(["make", "defconfig"], cwd=scratch_dir, check=True)
+        with open(os.path.join(scratch_dir, ".config"), "a") as f:
+            f.write("\nCONFIG_BPF=y\n")
+            f.write("CONFIG_BPF_SYSCALL=y\n")
+            f.write("CONFIG_BPF_JIT=y\n")
+            f.write("CONFIG_BPF_EVENTS=y\n")
+            f.write("CONFIG_BPF_EVENTS=y\n")
+            f.write("CONFIG_KPROBES=y\n")
+            f.write("CONFIG_HAVE_KPROBES=y\n")
+            f.write("CONFIG_NET_CLS_ACT=y\n")
+            f.write("CONFIG_NET_ACT_BPF=y\n")
+
+        subprocess.run(["make", "olddefconfig"], cwd=scratch_dir, check=True)
+        subprocess.run(["make", "modules_prepare"], cwd=scratch_dir, check=True)
+        subprocess.run(["sudo", "ln", "-sfn", scratch_dir, build_path], check=True)
+        print(f"[!] WSL2 upstream kernel headers for relase {branch} loaded to {build_path}")
+        return True
+
+    else:
+        try:
+            subprocess.run(["sudo", "apt-get", "update"], check=True)
+            subprocess.run(["sudo", "apt-get", "install", "-y", f"linux-headers-{kernel_release}"], check=True)
+            print("[!] Standard kernel headers for kernel release: {kernel_release} loaded.")
+            return True
+        except subprocess.CalledProcessError:
+            subprocess.run(["sudo", "apt-get", "install", "-y", "linux-headers-generic"], check=True)
+            print("[!] Generic kernel headers loaded.")
+            return True
+
+def configure_vfio_user_pkt_sniffer_sudo_exemption(project_root):
+    """Setup passwordless sudo rules for vfio-user packet sniffer."""
+    local_user = os.environ.get("USER") or os.environ.get("LOGNAME")
+    sudoers_file = f"/etc/sudoers.d/vfio_user_pkt_sniffer"
+    sockdump_path = f"{project_root}/tools/net/sockdump.py"
+    pcap_file_path = f"{project_root}/logs/vfio-user.pcap"
+
+    exemption_rules = (
+        f"{local_user} ALL=(ALL) NOPASSWD: /usr/bin/python3 {sockdump_path} *\n"
+        f"{local_user} ALL=(ALL) NOPASSWD: /usr/bin/chown {local_user}\\:{local_user} {pcap_file_path}\n"
+        f"{local_user} ALL=(ALL) NOPASSWD: /usr/bin/chmod 664 {pcap_file_path}\n"
+    )
+
+    sudoers_cache_dir = os.path.expanduser("~/.config/vfio_user_pkt_sniffer")
+    os.makedirs(sudoers_cache_dir, exist_ok=True)
+    sudoers_cache_file = os.path.join(sudoers_cache_dir, "vfio_user_pkt_sniffer.cache")
+
+    if os.path.exists(sudoers_file) and not os.path.exists(sudoers_cache_file):
+        try:
+            result = subprocess.run(["sudo", "cat", sudoers_file], capture_output=True, text=True, check=True)
+            with open(sudoers_cache_file, "w") as f:
+                f.write(result.stdout)
+        except subprocess.CalledProcessError:
+            pass
+    cache_content = ""
+    if os.path.exists(sudoers_cache_file):
+        try:
+            with open(sudoers_cache_file, "r") as f:
+                cache_content = f.read()
+        except IOError:
+            pass
+
+    if exemption_rules in cache_content:
+        print(f"[✓ Skipping] Sudoers rules for {os.path.basename(project_root)} already configured")
+        return True
+
+    final_sudoers = cache_content + exemption_rules
+
+    try:
+        os.makedirs(sudoers_cache_dir, exist_ok=True)
+        with open(sudoers_cache_file, "w") as f:
+            f.write(final_sudoers)
+
+        check_cmd = ["sudo", "visudo", "-c", "-f", sudoers_cache_file]
+        result = subprocess.run(check_cmd, capture_output=True, text=True)
+
+        if result.returncode != 0:
+            print(f"\033[91m[⚠] Sudoers syntax validation failed: {result.stderr.strip()}\033[0m")
+            if os.path.exists(sudoers_cache_file):
+                os.remove(sudoers_cache_file)
+            return False
+
+        subprocess.run(["sudo", "cp", sudoers_cache_file, sudoers_file], check=True)
+        subprocess.run(["sudo", "chown", "root:root", sudoers_file], check=True)
+        subprocess.run(["sudo", "chmod", "0440", sudoers_file], check=True)
+
+        print(f"[✓ Success] Configured: {exemption_rules} to {sudoers_file} for vfio-user packet sniffer")
+        return True
+
+    except subprocess.CalledProcessError as e:
+        print(f"\033[91m[⚠] Failed to write sudoers rules: {e}\033[0m")
+        return False
 
 def start_vfio_user_pkt_sniffer(project_root, pcap_file_path, slog_file_path, socket_path) -> Optional[subprocess.Popen]:
     """Launch sockdump as a background root process to capture
@@ -168,8 +304,6 @@ def stop_vfio_user_pkt_sniffer(sniffer_proc):
     if sniffer_proc is None:
         return
 
-    #print(f"[Agent] Disarming vfio-user packet sniffer...", flush=True)
-
     if hasattr(sniffer_proc, 'wireshark_proc') and sniffer_proc.wireshark_proc:
         if sniffer_proc.wireshark_proc.poll() is None:
             print("[Wireshark] Closing visualization pipe", flush=True)
@@ -183,13 +317,15 @@ def stop_vfio_user_pkt_sniffer(sniffer_proc):
                     sniffer_proc.wireshark_proc.wait(timeout=1.0)
                 except Exception:
                     pass
-
     try:
         if sniffer_proc.poll() is None:
             start_time = time.time()
             terminated = False
 
-            subprocess.run(["sudo", "kill", "-2", str(sniffer_proc.pid)], check=False)
+            try:
+                os.killpg(sniffer_proc.pid, signal.SIGINT)
+            except Exception as sig_err:
+                os.kill(sniffer_proc.pid, signal.SIGINT)
             while time.time() - start_time < 4.0:
                 if sniffer_proc.poll() is not None:
                     terminated = True
@@ -198,7 +334,10 @@ def stop_vfio_user_pkt_sniffer(sniffer_proc):
 
             if not terminated:
                 print("[Agent] Forcing sniffer kill...", flush=True)
-                subprocess.run(["sudo", "kill", "-9", str(sniffer_proc.pid)], check=False)
+                try:
+                    os.killpg(sniffer_proc.pid, signal.SIGKILL)
+                except Exception:
+                    os.kill(sniffer_proc.pid, signal.SIGKILL)
                 sniffer_proc.wait(timeout=1)
 
     except Exception as ex:
