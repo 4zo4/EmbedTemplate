@@ -39,11 +39,11 @@ def print_workspace_manifest(blueprint):
     if repos:
         print("[📦 Mandatory Repositories]:")
         for repo in repos:
-            dir = repo.get("dir") or repo["path"].split("/")[-1]
+            dir = repo.get("dir") or repo["slug"].split("/")[-1]
             version_info = f" version: {repo['tag']}" if repo.get("tag") else ""
             branch_info = f" branch: {repo['branch']}" if repo.get("branch") else ""
             repo_info = format_repo_info(repo)
-            print(f"  • {dir} -> {repo['path']}{repo_info}")
+            print(f"  • {dir} -> {repo['slug']}{repo_info}")
 
     scopes = blueprint.get("scopes", [])
     if scopes:
@@ -55,7 +55,7 @@ def print_workspace_manifest(blueprint):
             if scope.get("repos"):
                 scope_repos = []
                 for repo in scope["repos"]:
-                    repo_dir = repo["dir"] if repo.get("dir") else repo["path"].split("/")[-1]
+                    repo_dir = repo["dir"] if repo.get("dir") else repo["slug"].split("/")[-1]
                     repo_info = format_repo_info(repo)
                     scope_repos.append(f"{repo_dir}{repo_info}")
                 print(f"    Repos: {', '.join(scope_repos)}")
@@ -80,7 +80,6 @@ try:
     from InquirerPy.base.control import Choice
 except ModuleNotFoundError:
     try:
-        import importlib.metadata
         importlib.metadata.version("InquirerPy")
         os.execv(sys.executable, [sys.executable] + sys.argv)
     except importlib.metadata.PackageNotFoundError:
@@ -117,20 +116,53 @@ def is_package_installed(package_name):
     except FileNotFoundError:
         return False
 
-def install_peakrdl_packages():
-    """Install PeakRDL package."""
+def install_peakrdl_packages(project_root_dir):
+    """Install PeakRDL packages."""
     try:
-        importlib.metadata.version("peakrdl")
+        importlib.metadata.version("peakrdl-cli")
         return True
     except importlib.metadata.PackageNotFoundError:
         pass
+    custom_peakrdl_cheader = os.path.join(project_root_dir, "tools", "peakrdl")
     try:
-        subprocess.run([sys.executable, "-m", "pip", "install", "peakrdl",
+        subprocess.run([sys.executable, "-m", "pip", "install", "peakrdl-cli",
+                        "--break-system-packages", "--no-warn-script-location"],
+                        check=True, stdout=subprocess.DEVNULL)
+        subprocess.run([sys.executable, "-m", "pip", "install", custom_peakrdl_cheader,
                         "--break-system-packages", "--no-warn-script-location"], check=True)
         return True
     except subprocess.CalledProcessError as e:
         print(f"[⚠️] Failed to run pip install: {e}")
         return False
+
+def uninstall_pip_package(package_name):
+    """Uninstall a pip package if it is installed."""
+    try:
+        importlib.metadata.version(package_name)
+    except importlib.metadata.PackageNotFoundError:
+        print(f"[⚠️] Warning: Package '{package_name}' is not installed. Skipping.")
+        return True
+
+    print(f"[Agent] Uninstalling pip package: {package_name}")
+
+    try:
+        subprocess.run([
+            sys.executable, "-m", "pip", "uninstall", package_name, "-y",
+            "--break-system-packages"
+        ], check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"[⚠️] Failed to run pip uninstall for {package_name}: {e}")
+        return False
+
+    user_local_bin = os.path.expanduser(os.path.join("~", ".local", "bin", package_name))
+
+    if os.path.exists(user_local_bin):
+        try:
+            os.remove(user_local_bin)
+        except OSError as e:
+            print(f"[⚠️] Failed to remove system bin file {user_local_bin}: {e}")
+            return False
+    return True
 
 def get_qemu_dirs():
     """Scan the system paths and return a list of directories containing QEMU binaries."""
@@ -316,7 +348,7 @@ def configure_vfio_user_dissector(project_root_dir):
     except Exception as e:
         print(f"[⚠️] Failed to mirror plugin binary script asset: {e}")
 
-def verify_project_symlinks(project_root_dir, tools_dir, bsp_dir, os_dir, selected_ids):
+def verify_symlinks(project_root_dir, tools_dir, bsp_dir, os_dir, selected_ids):
     """Generate the third_party relative project directory symbolic links."""
     links_to_verify = [
         {
@@ -383,8 +415,10 @@ def align_repo_state(repo_path, tag = None, branch = None):
             )
 
             try:
-                target_tag_hash = subprocess.run(["git", "rev-parse", f"refs/tags/{tag}^{{commit}}"], cwd=repo_path, stdout=subprocess.PIPE, text=True, check=True).stdout.strip()
-                current_head_hash = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo_path, stdout=subprocess.PIPE, text=True, check=True).stdout.strip()
+                target_tag_hash = subprocess.run(["git", "rev-parse", f"refs/tags/{tag}^{{commit}}"],
+                                                cwd=repo_path, stdout=subprocess.PIPE, text=True, check=True).stdout.strip()
+                current_head_hash = subprocess.run(["git", "rev-parse", "HEAD"],
+                                                cwd=repo_path, stdout=subprocess.PIPE, text=True, check=True).stdout.strip()
 
                 if current_head_hash == target_tag_hash:
                     print(f"[✓ Git] '{repo_path}' aligned on tag '{tag}'")
@@ -422,7 +456,8 @@ def align_repo_state(repo_path, tag = None, branch = None):
                 subprocess.run(["git", "stash"], cwd=repo_path, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
             try:
-                subprocess.run(["git", "checkout", "-b", branch, f"refs/tags/{tag}"], cwd=repo_path, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(["git", "checkout", "-b", branch, f"refs/tags/{tag}^{{commit}}"],
+                               cwd=repo_path, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except subprocess.CalledProcessError as e:
                 print(f"[⚠️] Error: Failed to checkout '{branch}': {e}")
 
@@ -581,13 +616,28 @@ def configure_x11_resources(project_root):
     except subprocess.CalledProcessError:
         pass
 
-def remove_components(target, blueprint, config_state):
+def remove_symlink(symlink_path):
+    """Remove a symbolic link if it exists."""
+    if os.path.islink(symlink_path):
+        try:
+            os.unlink(symlink_path)
+            print(f"Removed symlink: {symlink_path}")
+        except OSError as e:
+            print(f"[⚠️] Error removing symlink {symlink_path}: {e}")
+    elif os.path.exists(symlink_path):
+        print(f"[⚠️] Warning: {symlink_path} is not a symbolic link. Skipping.")
+
+def remove_components(project_root_dir, target, blueprint, config_state):
     """ Remove installed components """
     remove_all = (target == "all")
     remove_repos = []
     remove_packages = []
     remove_scope_ids = []
-
+    symlink_map = {
+        "tfa": os.path.join(project_root_dir, "third_party", "bsp", "tf-a"),
+        "freertos": os.path.join(project_root_dir, "third_party", "os", "freertos"),
+        "peakrdl": os.path.join(project_root_dir, "tools", "peakrdl")
+    }
     config_meta = config_state.get("meta", {})
     installed_repo_ids = config_meta.get("repos", []) + config_meta.get("selected_repos", [])
     installed_scope_ids = config_meta.get("selected_scopes", [])
@@ -617,6 +667,11 @@ def remove_components(target, blueprint, config_state):
             rdir = Path(repo.get("rdir", ""))
             qemu_path = rdir / "qemu"
             uninstall_qemu_distro(str(qemu_path))
+        if repo_id == "peakrdl":
+            uninstall_pip_package("peakrdl-cheader")
+            uninstall_pip_package("peakrdl-cli")
+        if symlink_path := symlink_map.get(repo_id):
+            remove_symlink(symlink_path)
 
     if remove_packages:
         print(f"[Agent] Purging system packages: {', '.join(remove_packages)}")
@@ -627,7 +682,7 @@ def remove_components(target, blueprint, config_state):
             print(f"[⚠️] Error: Package purging: {e}")
 
     for repo in remove_repos:
-        dir = repo.get("dir") or Path(repo["path"]).name
+        dir = repo.get("dir") or Path(repo["slug"]).name
         rdir = Path(repo.get("rdir"))
         repo_path = rdir / dir
 
@@ -713,7 +768,7 @@ def main():
             sys.exit(0)
         if args.remove:
             print(f"[🌲 Agent] Removing {args.remove}...")
-            remove_components(args.remove, blueprint, config_state)
+            remove_components(project_root_dir, args.remove, blueprint, config_state)
             sys.exit(0)
 
     print_workspace_manifest(blueprint)
@@ -814,7 +869,7 @@ def main():
     def add_repos(repo_list):
         for r_entry in repo_list:
             r_id = r_entry["id"]        # mandatory entry
-            r_path = r_entry["path"]    # mandatory entry
+            r_slug = r_entry["slug"]    # mandatory entry
             r_type = r_entry.get("type")
             r_dir = r_entry.get("dir")
             r_rdir = r_entry.get("rdir") or resolved_dirs.get(r_type)
@@ -822,18 +877,20 @@ def main():
             r_branch = r_entry.get("branch")
             r_depth = r_entry.get("clone_depth")
             r_url = r_entry.get("upstream_url")
+            r_sparse = r_entry.get("sparse")
 
             if r_id and r_id not in selected_ids:
                 repo_ids.append(r_id)
 
-            final_repos[r_path] = {
+            final_repos[r_slug] = {
                 "id": r_id,         # unique identifier for the repository
                 "dir": r_dir,       # clone destination directory name (if specified), otherwise defaults to repo name
                 "rdir": r_rdir,     # clone destination base/root directory based on type (os, bsp, tools)
                 "tag": r_tag,       # optional tag reference to align the repository to
                 "branch": r_branch, # optional branch reference to align the repository to
                 "depth": r_depth,   # optional clone depth for shallow clones (if specified)
-                "url": r_url        # optional upstream URL for the repository (if specified, overrides default GitHub URL)
+                "url": r_url,       # optional upstream URL for the repository (if specified, overrides default GitHub URL)
+                "sparse": r_sparse  # optional sparse checkout
             }
     add_repos(repos)
 
@@ -852,16 +909,17 @@ def main():
         "packages": sorted(list(final_packages)),
         "repos": [
             {
-                "path": r_path,
+                "slug": r_slug,
                 "id": r_info["id"],
                 "dir": r_info["dir"],
                 "rdir": r_info["rdir"],
                 "tag": r_info["tag"],
                 "branch": r_info["branch"],
                 "depth": r_info["depth"],
-                "url": r_info["url"]
+                "url": r_info["url"],
+                "sparse": r_info["sparse"]
             }
-            for r_path, r_info in sorted(final_repos.items())
+            for r_slug, r_info in sorted(final_repos.items())
         ],
     }
 
@@ -881,7 +939,7 @@ def main():
     print("Processing Repositories & Building From Source...")
 
     for repo_entry in compiled_config["repos"]:
-        repo = repo_entry["path"]
+        repo_slug = repo_entry["slug"]
         repo_id = repo_entry["id"]
         repo_dir = repo_entry["dir"]
         repo_root_dir = repo_entry["rdir"]
@@ -889,32 +947,55 @@ def main():
         if repo_id and repo_id not in (repo_ids + selected_ids):
             continue
 
-        repo_name = repo_dir if repo_dir else repo.split("/")[-1]
+        repo_name = repo_dir if repo_dir else repo_slug.split("/")[-1]
         os.makedirs(repo_root_dir, exist_ok=True)
         repo_path = os.path.join(repo_root_dir, repo_name)
-        clone_url = repo_entry.get("url") or f"https://github.com/{repo}.git"
+        clone_url = repo_entry.get("url") or f"https://github.com/{repo_slug}.git"
+        branch = repo_entry.get("branch")
+        tag = repo_entry.get("tag")
 
         if os.path.exists(repo_path) and os.path.isdir(os.path.join(repo_path, ".git")):
             print(f"[→] Repository '{clone_url}' already downloaded at: {repo_path}")
         else:
             print(f"[→] Downloading: {clone_url} -> {repo_path}")
 
-            clone_cmd = ["git", "clone"]
-            if repo_entry.get("depth"):
-                clone_cmd += ["--depth", str(repo_entry["depth"])]
-            clone_cmd += [clone_url, repo_path]
-            try:
-                subprocess.run(clone_cmd, check=True)
-            except subprocess.CalledProcessError:
-                print(f"[⚠️] Failed to fetch repository: {repo}")
-                continue
+            repo_depth = repo_entry.get("depth")
+            repo_sparse = repo_entry.get("sparse")
+            legacy_remote = repo_id == "tfa"
 
-        tag=repo_entry.get("tag")
-        branch=repo_entry.get("branch")
+            if repo_sparse and legacy_remote:
+                try:
+                    branch = branch or "master"
+                    subprocess.run(["git", "init", "-b", branch, repo_path], check=True, stdout=subprocess.DEVNULL)
+                    subprocess.run(["git", "remote", "add", "origin", clone_url], cwd=repo_path, check=True)
+                    subprocess.run(["git", "config", "core.sparseCheckout", "true"], cwd=repo_path, check=True)
+                    subprocess.run(["git", "sparse-checkout", "init", "--cone"], cwd=repo_path, check=True, stdout=subprocess.DEVNULL)
+                except subprocess.CalledProcessError as e:
+                    print(f"[⚠️] Sparse initialization failed: {e}")
+                    if os.path.exists(repo_path):
+                        shutil.rmtree(repo_path)
+                    continue
+            else:
+                clone_cmd = ["git", "clone"]
+
+                if repo_sparse:
+                    clone_cmd += ["--depth", "1", "--filter=blob:none", "--sparse"]
+                elif repo_depth:
+                    clone_cmd += ["--depth", str(repo_depth)]
+
+                clone_cmd += [clone_url, repo_path]
+                try:
+                    subprocess.run(clone_cmd, check=True)
+                except subprocess.CalledProcessError:
+                    print(f"[⚠️] Failed to fetch repository: {repo}")
+                    continue
+            if repo_sparse:
+                subprocess.run(["git", "sparse-checkout", "set"] + repo_sparse, cwd=repo_path, check=True)
+
         align_repo_state(repo_path, tag=tag, branch=branch)
         build_repo(repo_name, repo_path, tag=tag)
 
-    verify_project_symlinks(project_root_dir, resolved_tools_dir, resolved_bsp_dir, resolved_os_dir, selected_ids)
+    verify_symlinks(project_root_dir, resolved_tools_dir, resolved_bsp_dir, resolved_os_dir, selected_ids)
 
     if "networking" in selected_scope_ids:
         if os.path.exists("/proc/sys/net/core/bpf_jit_enable"):
@@ -928,7 +1009,7 @@ def main():
     configure_x11_resources(project_root_dir)
 
     if "peakrdl" in selected_repo_ids:
-        install_peakrdl_packages()
+        install_peakrdl_packages(project_root_dir)
 
     print("[+] Setup completed")
 

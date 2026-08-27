@@ -33,9 +33,12 @@
       "xfonts-utils"
     ],
     "repos": [
-      { "path": "qemu/qemu", "id": "qemu", "type": "tools", "tag": "v11.1.0", "clone_depth": 1 },
-      { "path": "4zo4/FreeRTOS-Kernel", "id": "freertos", "dir": "freertos", "type": "os", "branch": "feature/embed_template_updates" },
-      { "path": "TF-A/trusted-firmware-a", "id": "tfa", "dir": "tf-a", "type": "bsp", "tag": "v2.15.0", "branch": "master", "clone_depth": 1, "upstream_url": "https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git" }
+      { "slug": "qemu/qemu", "id": "qemu", "type": "tools", "tag": "v11.1.0", "clone_depth": 1 },
+      { "slug": "4zo4/FreeRTOS-Kernel", "id": "freertos", "dir": "freertos", "type": "os",
+        "branch": "feature/embed_template_updates" },
+      { "slug": "TF-A/trusted-firmware-a", "id": "tfa", "dir": "tf-a", "type": "bsp", "tag": "v2.15.0",
+        "branch": "master", "upstream_url": "https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git",
+        "sparse": ["lib/libc", "include/lib/libc", "include/export"] }
     ]
   },
   "scopes": [
@@ -73,7 +76,7 @@
       "description": "RDL (Register Description Language) processing tool",
       "packages": [],
       "repos": [
-        { "id": "peakrdl", "path": "4zo4/PeakRDL-cheader", "dir": "peakrdl", "type": "tools", "branch": "feature/custom-templates" }
+        { "id": "peakrdl", "slug": "4zo4/PeakRDL-cheader", "dir": "peakrdl", "type": "tools", "branch": "feature/custom-templates" }
       ]
     }
   ]
