@@ -1,15 +1,15 @@
 /**
  * @file startup.c
- * @brief Startup code and interrupt vector table for Cortex-M4.
- * This file defines the reset handler, default interrupt handlers, and the interrupt vector table for the Cortex-M4 microcontroller.
+ * @brief Startup code and interrupt vector table for Cortex-M.
+ * This file defines the reset handler, default interrupt handlers, and the interrupt vector table for the Cortex-M microcontroller.
  * It sets up the initial stack pointer, copies the .data section from flash to RAM, zeroes the .bss section, and then jumps to the main function.
  * The interrupt handlers include the default handlers for NMI, Hard Fault, Memory Management Fault, Bus Fault, Usage Fault, and Debug Monitor, as well as the UART1 interrupt handler and the Watchdog interrupt handler.
- * The vector table is placed in the .isr_vector section and is aligned to 8 bytes as required by the Cortex-M4 architecture.
+ * The vector table is placed in the .isr_vector section and is aligned to 8 bytes as required by the Cortex-M architecture.
  */
 #include <stdint.h>
 
 // prototypes without include file
-int main(void);
+int  main(void);
 void reset_handler(void);
 void UART1_irq_handler(void);
 void nmi_handler(void);
@@ -22,7 +22,13 @@ void WWDG_irq_handler(void);
 void SVC_Handler(void);
 void PendSV_Handler(void);
 void SysTick_Handler(void);
-
+#if defined(__ARM_ARCH_8M_MAIN__) || defined(__ARM_ARCH_8M_BASE__)
+#define UART_IRQ_NO 37
+void secure_fault_handler(void);
+#else
+#define UART_IRQ_NO 53
+#define secure_fault_handler 0
+#endif
 extern uint32_t _sdata, _edata, _sbss, _ebss, _sidata, _estack;
 
 #define SCB_CPACR (*((volatile uint32_t *)0xE000ED88))
@@ -30,8 +36,8 @@ extern uint32_t _sdata, _edata, _sbss, _ebss, _sidata, _estack;
 static inline void fpu_enable(void)
 {
     /* Set bits 20-23 to 11 (Full Access) for CP10 and CP11 */
-    SCB_CPACR |= (0xF << 20); 
-    __asm volatile ("dsb; isb");
+    SCB_CPACR |= (0xF << 20);
+    __asm volatile("dsb; isb");
 }
 
 void reset_handler(void)
@@ -66,14 +72,15 @@ void (*const vector_table[])(void) = {
     mem_manage_handler,       // 4: MPU
     bus_fault_handler,        // 5: Bus Fault
     usage_fault_handler,      // 6: Usage Fault
-    0, 0, 0, 0,               // 7-10: Reserved
+    secure_fault_handler,     // 7: Secure Fault or Reserved for Armv7-M
+    0, 0, 0,                  // 8-10: Reserved
 #ifdef ENABLE_RTOS
     [11] = SVC_Handler,       // 11: SVC
     [12] = debug_mon_handler, // 12: Debug Monitor
     0,                        // 13: Reserved
     [14] = PendSV_Handler,    // 14: PendSV
     [15] = SysTick_Handler,   // 15: SysTick
-#else
+#else // event-loop
     [11] = 0,                 // SVC
     [12] = debug_mon_handler, // 12: Debug Monitor
     0,                        // 13: Reserved
@@ -81,6 +88,7 @@ void (*const vector_table[])(void) = {
     [15] = SysTick_Handler,   // 15: SysTick
 #endif
     [16] = WWDG_irq_handler,  // 16: Watchdog IRQ 0
-    [53] = UART1_irq_handler, // 53: Cortex-M4 UART1 is IRQ 37 (No 53 with Cortex-M4 offset 16 for system IRQs)
+    [UART_IRQ_NO] = UART1_irq_handler, // 37: Cortex-M4 UART1 is IRQ 37 (No 53 with Cortex-M4 offset 16 for system IRQs)
+                                       // 21: Cortex-M33 UART1 is IRQ 21 (No 37 with Cortex-M33 offset 16 for system IRQs)
 };
 // clang-format on

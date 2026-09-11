@@ -11,6 +11,9 @@
 #include "common.h"
 #include "init.h"
 
+// System Clock Speed (168MHz for STM32F4)
+#define CPU_HZ 168000000ULL
+
 // STM32F4 UART Base and Register Definitions (Cortex-M4)
 #define USART1_BASE 0x40011000
 #define USART_SR (*(volatile uint32_t *)(USART1_BASE + 0x00))  // Status Register
@@ -26,12 +29,20 @@
 #define USART_CR1_RE BIT(2)     // Receiver Enable
 #define USART_CR1_RXNEIE BIT(5) // RX Interrupt Enable
 
+void init_systick_poll(void);
+bool systick_poll(void);
+void systick_reset(void);
+
+// -- Globals --
+
 alignas(8) uint32_t initialized;
 
 static const irq_config_t peripheral_irqs[] = {
     {0,  RTOS_SAFE_PRIO}, // WWDG
     {37, RTOS_SAFE_PRIO}, // USART1
 };
+
+// -- End of globals --
 
 void init_uart(void)
 {
@@ -103,4 +114,76 @@ void WWDG_irq_handler(void)
     }
 }
 
-void (*volatile init_port_globals)(void) = nullptr;
+// RCC Peripheral Clock Enable Register for TIM5 (bit 3 of AHB1/APB1 depending on bus)
+// (layout for QEMU STM32F4 netduinoplus2)
+#define RCC_APB1ENR (*((volatile uint32_t *)0x40023840))
+#define RCC_APB1ENR_TIM5EN BIT(3)
+// TIM5 32-bit Base Addresses
+#define TIM5_BASE 0x40000C00
+#define TIM5_CR1 (*((volatile uint32_t *)(TIM5_BASE + 0x00)))
+#define TIM5_PSC (*((volatile uint32_t *)(TIM5_BASE + 0x28)))
+#define TIM5_ARR (*((volatile uint32_t *)(TIM5_BASE + 0x2C)))
+#define TIM5_CNT (*((volatile uint32_t *)(TIM5_BASE + 0x24)))
+#define TIM_CR1_CEN BIT(0) // Counter Enable bit
+
+// helper function to calibrate the hardware timer against SysTick
+static uint32_t calibrate_hw_timer(void)
+{
+    while (!systick_poll()) {
+        NOP();
+    }
+
+    const uint32_t cal_window_ms = 50;
+    uint32_t       cal_start = TIM5_CNT;
+
+    for (uint32_t ms = 0; ms < cal_window_ms; ms++) {
+        while (!systick_poll()) {
+            NOP();
+        }
+    }
+
+    uint32_t cal_end = TIM5_CNT;
+    uint32_t delta = cal_end - cal_start;
+
+    // calculate the number of timer cycles per millisecond
+    return delta * (1000 / cal_window_ms);
+}
+
+uint32_t init_hw_timer(volatile uintptr_t *timer_hz)
+{
+    RCC_APB1ENR |= RCC_APB1ENR_TIM5EN;
+
+    // Set Prescaler to 0 (run at full timer clock speed)
+    TIM5_PSC = 0;
+
+    // Set Auto-Reload to max value for a 32-bit counter
+    TIM5_ARR = 0xFFFFFFFFUL;
+
+    TIM5_CNT = 0;
+    TIM5_CR1 |= TIM_CR1_CEN;
+
+    init_systick_poll(); // Initialize SysTick for 1ms polling
+    /*
+     * Calibrate the hardware timer against SysTick and change
+     * the timer_hz variable to the calibrated value.
+     */
+    *timer_hz = calibrate_hw_timer();
+    systick_reset();
+
+    return TIM5_CNT;
+}
+
+uint32_t get_hw_timer_cycles(void)
+{
+    return TIM5_CNT;
+}
+
+static void init_stm32f4_globals(void)
+{
+    if (initialized & GLOBALS_INITIALIZED)
+        return;
+    cpu_hz = CPU_HZ;
+    initialized |= GLOBALS_INITIALIZED;
+}
+
+void (*volatile init_port_globals)(void) = init_stm32f4_globals;

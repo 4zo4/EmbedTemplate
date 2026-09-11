@@ -11,6 +11,7 @@
 #include "common.h"
 #include "event.h"
 #include "gic.h"
+#include "init.h"
 
 #ifdef ENABLE_RTOS
 #include "FreeRTOS.h"
@@ -38,6 +39,9 @@ alignas(8) static uint32_t timer_1ms_ticks = 0;
 
 void init_timestamp(void)
 {
+    if (initialized & TIMESTAMP_INITIALIZED)
+        return;
+
     assert((CPU_HZ != 0) && "[ERROR] Undefined CPU System Clock Speed.");
 
     uint32_t low, high;
@@ -47,6 +51,7 @@ void init_timestamp(void)
     boot_ts = ticks / (CPU_HZ / 1000000ULL);
     timer_1ms_ticks = CPU_HZ / 1000U;
 
+    initialized |= TIMESTAMP_INITIALIZED;
     log_set_level(DOMAIN_SYS, ENTITY_TIMER, LOG_LEVEL_INFO);
     LOG_TIME_INFO("Timestamp initialized");
 }
@@ -115,6 +120,8 @@ void clear_systick(void)
 
 void init_systick(void)
 {
+    if (initialized & SYSTICK_INITIALIZED)
+        return;
     uint32_t ctrl = 1U;
 
     gic_register_interrupt(SYS_TICK_IRQ_ID, SYS_TICK_HANDLER);
@@ -124,5 +131,6 @@ void init_systick(void)
 
     gic_enable_interrupt(SYS_TICK_IRQ_ID, 0x20);
 
+    initialized |= SYSTICK_INITIALIZED;
     LOG_TIME_INFO("SysTick initialized for 1ms ticks");
 }

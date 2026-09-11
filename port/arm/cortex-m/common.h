@@ -28,5 +28,6 @@ void signal_data_ready(void);
 bool stdin_ready(int timeout_ms);
 void nvic_cfg_peripheral_irqs(const irq_config_t *peripheral_irqs, uint32_t count);
 
-extern bool echo_enabled;
-extern bool buffered_mode;
+extern bool               echo_enabled;
+extern bool               buffered_mode;
+extern volatile uintptr_t cpu_hz;
