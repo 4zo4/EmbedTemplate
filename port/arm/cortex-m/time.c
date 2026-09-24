@@ -55,18 +55,18 @@ void init_timestamp(void)
 
     assert((CPU_HZ != 0) && "[ERROR] Undefined CPU System Clock Speed.");
 
-#ifdef TARGET_CHIP_HW
-    DWT_LAR = DWT_LAR_UNLOCK; // Unlock DWT access
-#endif
+    DWT_LAR = DWT_LAR_UNLOCK;     // Unlock DWT access
     DEMCR |= DEMCR_TRCENA;        // Enable Trace
     DWT_CYCCNT = 0;               // Reset cycle counter
     DWT_CONTROL |= DWT_CYCCNTENA; // Start cycle counter
 
     boot_ts = 0;
     total_cycles = 0;
+
     for (volatile int i = 0; i < 100; i++) {
         NOP();
     }
+
     last_cycles = DWT_CYCCNT;
     if (last_cycles) {
         timer_hz = CPU_HZ;
@@ -74,9 +74,13 @@ void init_timestamp(void)
         last_cycles = init_hw_timer(&timer_hz);
         hw_timer = true;
     }
+
     initialized |= TIMESTAMP_INITIALIZED;
     log_set_level(DOMAIN_SYS, ENTITY_TIMER, LOG_LEVEL_INFO);
-    LOG_TIME_INFO("Timestamp initialized %s with timer_hz=%lu", hw_timer ? "using HW timer" : "using DWT cycle counter", (unsigned long)timer_hz);
+    // clang-format off
+    LOG_TIME_INFO("Timestamp initialized %s with timer_hz=%lu",
+        hw_timer ? "using HW timer" : "using DWT cycle counter", (unsigned long)timer_hz);
+    // clang-format on
 }
 
 uint64_t get_timestamp48(void)

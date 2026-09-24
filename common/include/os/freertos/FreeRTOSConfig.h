@@ -46,9 +46,31 @@ void clear_systick(void);
 #define vPortSVCHandler SVC_Handler
 #define xPortPendSVHandler PendSV_Handler
 #define xPortSysTickHandler SysTick_Handler
-#define configKERNEL_INTERRUPT_PRIORITY (configLIBRARY_LOWEST_INTERRUPT_PRIORITY << (8 - configPRIO_BITS))
+#define configKERNEL_INTERRUPT_PRIORITY \
+    (configLIBRARY_LOWEST_INTERRUPT_PRIORITY << (8 - configPRIO_BITS))
 #define configMAX_SYSCALL_INTERRUPT_PRIORITY (5 << (8 - configPRIO_BITS))
 #endif // STM32F4
+#ifdef TARGET_CORTEX_M33
+/* Cortex-M33 (mps2-an505) Specifics */
+#define configCPU_CLOCK_HZ ((unsigned long)25000000) // 25MHz on QEMU
+#define configMAX_PRIORITIES (5)
+#define configPRIO_BITS 4 // 4 Bits of Interrupt Priority on mps2-an505
+#define configLIBRARY_LOWEST_INTERRUPT_PRIORITY 0x0F
+#define configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY 0x04
+// System Interrupt Vector Mapping for ARMv8-M Core
+#define vPortSVCHandler SVC_Handler
+#define xPortPendSVHandler PendSV_Handler
+#define xPortSysTickHandler SysTick_Handler
+// Priority Calculations
+#define configKERNEL_INTERRUPT_PRIORITY \
+    (configLIBRARY_LOWEST_INTERRUPT_PRIORITY << (8 - configPRIO_BITS))
+#define configMAX_SYSCALL_INTERRUPT_PRIORITY (5 << (8 - configPRIO_BITS))
+// ARMv8-M TrustZone & Security Component Overrides
+#define configENABLE_TRUSTZONE 0
+#define configRUN_FREERTOS_SECURE_ONLY 0
+#define configENABLE_MPU 0
+#define configENABLE_FPU 1
+#endif // TARGET_CORTEX_M33
 #elif defined(ARCH_X86)
 #ifdef TARGET_X86_VIRT
 #define configUSE_PORT_OPTIMISED_TASK_SELECTION 1

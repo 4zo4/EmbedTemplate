@@ -11,7 +11,7 @@
 // prototypes without include file
 int  main(void);
 void reset_handler(void);
-void UART1_irq_handler(void);
+void UART_irq_handler(void);
 void nmi_handler(void);
 void hard_fault_handler(void);
 void mem_manage_handler(void);
@@ -23,15 +23,21 @@ void SVC_Handler(void);
 void PendSV_Handler(void);
 void SysTick_Handler(void);
 #if defined(__ARM_ARCH_8M_MAIN__) || defined(__ARM_ARCH_8M_BASE__)
-#define UART_IRQ_NO 37
+#define WWDG_VEC 16
+#define UART_VEC 48 // Rx IRQ
 void secure_fault_handler(void);
 #else
-#define UART_IRQ_NO 53
+#define WWDG_VEC 16
+#define UART_VEC 53 // Rx IRQ
 #define secure_fault_handler 0
 #endif
 extern uint32_t _sdata, _edata, _sbss, _ebss, _sidata, _estack;
 
-#define SCB_CPACR (*((volatile uint32_t *)0xE000ED88))
+// System Control Block (SCB) register definitions
+#define SCB_VTOR (*((volatile uint32_t *)0xE000ED08))  // Vector Table Offset Register
+#define SCB_CPACR (*((volatile uint32_t *)0xE000ED88)) // Coprocessor Access Control Register
+
+void (*const vector_table[])(void);
 
 static inline void fpu_enable(void)
 {
@@ -40,10 +46,18 @@ static inline void fpu_enable(void)
     __asm volatile("dsb; isb");
 }
 
+static inline void vector_table_enable(void)
+{
+    SCB_VTOR = (uint32_t)vector_table;
+    __asm volatile("dsb; isb");
+}
+
 void reset_handler(void)
 {
+#ifndef ENABLE_SECURE
+    vector_table_enable();
     fpu_enable();
-
+#endif
     // Copy .data from FLASH to RAM
     uint32_t *src = &_sidata;
     uint32_t *dst = &_sdata;
@@ -72,23 +86,23 @@ void (*const vector_table[])(void) = {
     mem_manage_handler,       // 4: MPU
     bus_fault_handler,        // 5: Bus Fault
     usage_fault_handler,      // 6: Usage Fault
-    secure_fault_handler,     // 7: Secure Fault or Reserved for Armv7-M
+    secure_fault_handler,     // 7: Secure Fault for Armv8-M or Reserved for Armv7-M
     0, 0, 0,                  // 8-10: Reserved
 #ifdef ENABLE_RTOS
     [11] = SVC_Handler,       // 11: SVC
     [12] = debug_mon_handler, // 12: Debug Monitor
-    0,                        // 13: Reserved
+    [13] = 0,                 // 13: Reserved
     [14] = PendSV_Handler,    // 14: PendSV
     [15] = SysTick_Handler,   // 15: SysTick
 #else // event-loop
     [11] = 0,                 // SVC
     [12] = debug_mon_handler, // 12: Debug Monitor
-    0,                        // 13: Reserved
+    [13] = 0,                 // 13: Reserved
     [14] = 0,                 // 14: PendSV
     [15] = SysTick_Handler,   // 15: SysTick
 #endif
-    [16] = WWDG_irq_handler,  // 16: Watchdog IRQ 0
-    [UART_IRQ_NO] = UART1_irq_handler, // 37: Cortex-M4 UART1 is IRQ 37 (No 53 with Cortex-M4 offset 16 for system IRQs)
-                                       // 21: Cortex-M33 UART1 is IRQ 21 (No 37 with Cortex-M33 offset 16 for system IRQs)
+    [WWDG_VEC] = WWDG_irq_handler, // 16: Watchdog IRQ 0
+    [UART_VEC] = UART_irq_handler, // 37: Cortex-M4 UART1 Rx is IRQ 37 (Vector 53 for Cortex-M4)
+                                   // 32: Cortex-M33 UART0 RX is IRQ 32 (Vector 48 for Cortex-M33 MPS2-AN505)
 };
 // clang-format on

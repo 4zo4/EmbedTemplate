@@ -78,7 +78,7 @@ int putchar(int c)
     return c;
 }
 
-void UART1_irq_handler(void)
+void UART_irq_handler(void)
 {
     if (USART_SR & USART_SR_RXNE) {
         char c = (char)(USART_DR & 0xFF);

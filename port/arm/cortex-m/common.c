@@ -14,7 +14,7 @@
 #include "semphr.h"
 #endif
 
-// Nested Vectored Interrupt Controller (NVIC) Base and Register Definitions (Cortex-M4)
+// Nested Vectored Interrupt Controller (NVIC) Base and Register Definitions
 #define NVIC_BASE 0xE000E100
 #define NVIC_ISER ((volatile uint32_t *)(NVIC_BASE + 0x000)) // Interrupt Set-Enable Register
 #define NVIC_ICPR ((volatile uint32_t *)(NVIC_BASE + 0x280)) // Interrupt Clear-Pending Register
@@ -22,14 +22,17 @@
 #define NVIC_IPR_BASE 0xE000E400
 #define NVIC_IPR ((volatile uint8_t *)(NVIC_IPR_BASE)) // Interrupt Priority Register (byte-accessible priority 0-239)
 
+// -- Globals --
+
 static const char *enb = "enabled";
 static const char *dis = "disabled";
-
 #ifndef ENABLE_RTOS
 volatile EVT_BITMAP event_notify;
 #endif
 bool echo_enabled = true;
 bool buffered_mode = false;
+
+// -- End of globals --
 
 void nvic_cfg_peripheral_irqs(const irq_config_t *peripheral_irqs, uint32_t count)
 {

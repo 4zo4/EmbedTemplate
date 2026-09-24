@@ -83,23 +83,17 @@ def compile_firmware(target_chip, opt_args, verbose=False):
             "cmake", "-B", f"build/{target_chip}",
         ]
 
-    if target_chip == "cortex-a9-virt":
+    if target_chip in ["stm32f4", "cortex-a9-virt", "cortex-m33"]:
         if is_first_build:
             cmake_gen.extend([
                 "-DCMAKE_TOOLCHAIN_FILE=cmake/arm-none-eabi.cmake",
-                "-DTARGET_CHIP=cortex-a9-virt"
+                f"-DTARGET_CHIP={target_chip}"
             ])
     elif target_chip in ["gd32vf103", "gd32vf103-virt"]:
         if is_first_build:
             cmake_gen.extend([
                 "-DCMAKE_TOOLCHAIN_FILE=cmake/riscv-none-elf.cmake",
                 f"-DTARGET_CHIP={target_chip}"
-            ])
-    elif target_chip == "stm32f4":
-        if is_first_build:
-            cmake_gen.extend([
-                "-DCMAKE_TOOLCHAIN_FILE=cmake/arm-none-eabi.cmake",
-                "-DTARGET_CHIP=stm32f4"
             ])
     elif target_chip == "x86-virt":
         if is_first_build:
@@ -186,7 +180,7 @@ def main():
     enable_riscv = "riscv_toolchain" in config_scopes
 
     if enable_arm:
-        arm_chips = ["stm32f4", "cortex-a9-virt"]
+        arm_chips = ["stm32f4", "cortex-a9-virt", "cortex-m33"]
     if enable_riscv:
         riscv_chips = ["gd32vf103", "gd32vf103-virt"]
 
@@ -260,6 +254,7 @@ def main():
         print(f"\033[91m[Agent] Error: Firmware file not found: {target_image} Run compilation step first.\033[0m")
         sys.exit(1)
 
+    secure_boot_elf = None
     bridge_proc = None
     sniffer_proc = None
     gdb_sock = Path(f"/tmp/gdb_{agent_id}.sock")
@@ -284,6 +279,19 @@ def main():
             "-display", "none",
             "-serial", f"unix:{uart_sock},server=on,wait=on",
             "-device", f"loader,file={image_elf},cpu-num=0",
+        ]
+    elif args.chip == "cortex-m33":
+        print("[Agent] Structuring QEMU layout for ARM Cortex-M33 MPS2-AN505...")
+        secure_boot_elf = image_elf.parent / "secure_boot.elf"
+        qemu_bin = "qemu-system-arm"
+        qemu_args = [
+            "-M", "mps2-an505",
+            "-cpu", "cortex-m33",
+            "-m", "16M",
+            "-display", "none",
+            "-serial", f"unix:{uart_sock},server=on,wait=on",
+            "-device", f"loader,file={secure_boot_elf},cpu-num=0",
+            "-device", f"loader,file={image_elf}",
         ]
     elif args.chip == "gd32vf103-virt":
         print("[Agent] Structuring QEMU layout for RISC-V GD32VF103 Virtual...")
@@ -398,9 +406,11 @@ def main():
             gdb_env = current_env.copy() if current_env else os.environ.copy()
             gdb_env["DEBUGINFOD_URLS"] = ""
 
+            target_image = image_elf
+
             gdb_cmd = [
                 "xterm", "-hold", "-title", f"Agent {agent_id} GDB Target {arch}/{args.chip}",
-                "-e", "gdb-multiarch", image_elf, "-x", str(gdb_script_path)
+                "-e", "gdb-multiarch", target_image, "-x", str(gdb_script_path)
             ]
             gdb_proc = subprocess.Popen(gdb_cmd, env=gdb_env)
             print(f"\033[95m[Agent] Debug mode active. GDB stub listening on UDS '{gdb_sock}'. CPU frozen at entry point.\033[0m")

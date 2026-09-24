@@ -12,6 +12,13 @@
 #include "event.h"
 #include "utils.h"
 
+typedef struct stats_evt_s {
+    struct count_s {
+        uint32_t sys_ticks;
+        uint32_t data_ready;
+    } count;
+} stats_evt_t;
+
 // prototypes without include file
 int  init_hw(void);
 int  init_gpio(void);
@@ -27,6 +34,7 @@ uint64_t get_timestamp48(void);
 // -- Globals --
 
 extern volatile bool keep_running;
+stats_evt_t          stats_evt;
 
 // -- End of globals --
 
@@ -66,14 +74,13 @@ int main(void)
             }
             if (event & EVT_MSI_MASK) {   // is PCI MSI event
                 test_pci_post_msi_irq(2); // MSI test epilogue (2.2)
-                NOP();                    // Placeholder for tasks that need to run on PCI MSI event
             }
 #endif
             if (event & EVT_SYS_TICK) { // is SysTick event
-                NOP();                  // Placeholder for tasks that need to run on SysTick
+                stats_evt.count.sys_ticks++;
             }
             if (event & EVT_DATA_READY) { // is Data Ready event
-                NOP();                    // CLI passthrough for data pending and read from UART
+                stats_evt.count.data_ready++;
             }
             keep_running = cli_run(cli_ctx);
 #ifdef ENABLE_PCI

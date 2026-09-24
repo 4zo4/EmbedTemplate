@@ -69,6 +69,9 @@ if(RTOS)
             "${FREERTOS_PORT}" STREQUAL "IA32_flat")
             list(APPEND FREERTOS_PORT_SOURCES "${FREERTOS_PORT_DIR}/portASM.S")
         endif()
+        if("${FREERTOS_PORT}" MATCHES "ARM_CM33_NTZ")
+            list(APPEND FREERTOS_PORT_SOURCES "${FREERTOS_PORT_DIR}/portasm.c")
+        endif()
         list(APPEND FREERTOS_PORT_SOURCES "${FREERTOS_PORT_DIR}/port.c")
     else()
         set(FREERTOS_PORT_DIR "${FREERTOS_DIR}/portable/ThirdParty/GCC/Posix")
@@ -174,7 +177,7 @@ target_include_directories(infra_lib PRIVATE
 if(LOG_BUF_SIZE)
     set_source_files_properties(
         ${THIS_DIR}/src/diagnostic/logging/log_infra.c
-        PROPERTIES COMPILE_DEFINITIONS "LOG_BUF_SIZE=${LOG_BUF_SIZE}" 
+        PROPERTIES COMPILE_DEFINITIONS "LOG_BUF_SIZE=${LOG_BUF_SIZE}"
     )
 endif()
 set_source_files_properties(

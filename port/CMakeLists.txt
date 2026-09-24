@@ -1,11 +1,12 @@
 set(COMMON_INC_DIR "${CMAKE_SOURCE_DIR}/common/include")
 set(DRIVERS_INC_DIR "${CMAKE_SOURCE_DIR}/src/drivers/include")
 set(FREERTOS_DIR "${CMAKE_SOURCE_DIR}/third_party/os/freertos")
-
 set(STARTUP_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/init_hw.c)
 
 if(BARE_METAL)
     list(APPEND STARTUP_SOURCES ${TARGET_CHIP_SOURCES})
+    set_property(SOURCE ${TARGET_CHIP_SOURCES} APPEND PROPERTY COMPILE_DEFINITIONS ${EXTRA_FLAGS})
+    set_property(SOURCE ${TARGET_CHIP_SOURCES} APPEND PROPERTY COMPILE_OPTIONS "-O3")
 endif()
 
 if(RTOS)
@@ -84,6 +85,7 @@ target_link_libraries(runner PRIVATE
 )
 
 target_include_directories(runner PRIVATE
+    ${TARGET_CHIP_INC_DIRS} # From port/<arch>/<chip>/CMakeLists.txt
     # FreeRTOS
     ${FREERTOS_DIR}/include
     ${FREERTOS_PORT_DIR}

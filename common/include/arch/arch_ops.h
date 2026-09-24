@@ -3,7 +3,7 @@
 // clang-format off
 #if defined(ARCH_ARM) || defined(ARCH_RISCV)
     #define NOP() __asm__ volatile("nop")
-    #if defined(__ARM_ARCH_7A__)
+    #if defined(__ARM_ARCH_7A__) || defined(__ARM_ARCH_8M_MAIN__) || defined(__ARM_ARCH_8M_BASE__)
     #define HALT_CPU() do { \
         __asm__ volatile("dsb sy" : : : "memory"); \
         __asm__ volatile("wfi"    : : : "memory"); \
@@ -53,7 +53,8 @@
     #define memory_barrier() __asm volatile("dmb sy" : : : "memory")
     #define data_sync_barrier() __asm volatile("dsb sy" : : : "memory")
     #define ins_sync_barrier() __asm volatile("isb" : : : "memory")
-#elif defined(__ARM_ARCH_7M__) || defined(__ARM_ARCH_7EM__)
+#elif defined(__ARM_ARCH_7M__) || defined(__ARM_ARCH_7EM__) || \
+      defined(__ARM_ARCH_8M_MAIN__) || defined(__ARM_ARCH_8M_BASE__)
     static inline uint32_t disable_interrupts(void) {
         uint32_t primask;
         __asm volatile ("mrs %0, primask" : "=r" (primask));

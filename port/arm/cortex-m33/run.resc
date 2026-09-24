@@ -1,0 +1,17 @@
+:name: ARM Cortex-M33 MPS2-AN505, 168MHz
+mach create "cortex-m33"
+
+machine LoadPlatformDescription @port/arm/cortex-m33/mps2-an505.repl
+machine StartGdbServer 3333
+emulation CreateServerSocketTerminal 2222 "terminal" false
+connector Connect sysbus.uart0 terminal
+sysbus.uart0 BaudRate 115200
+
+macro reset
+"""
+    sysbus LoadELF @build/cortex-m33/port/runner.elf
+    cpu SP 0x28600000
+    cpu PC `sysbus GetSymbolAddress "reset_handler"`
+"""
+runMacro $reset
+start

@@ -1,0 +1,22 @@
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    -> cpu@0
+
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m33"
+    nvic: nvic
+
+nvic:
+    -> cpu@0
+
+flash: Memory.MappedMemory @ sysbus 0x00000000
+    size: 0x00400000
+
+ram: Memory.MappedMemory @ sysbus 0x28200000
+    size: 0x00401000
+
+dwt: Miscellaneous.DWT @ sysbus 0xE0001000
+    frequency: 168000000
+
+uart0: UART.CMSDK_APB_UART @ sysbus 0x40200000
+    RxInterrupt -> nvic@32
+    frequency: 168000000
