@@ -36,7 +36,7 @@ def setup_log_directory(log_dir, pcap_file_path, slog_file_path, max_backups=2):
        rotate old logs to preserve a history of executions."""
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
-        print(f"[Agent] Created logging directory: '{log_dir}/'", flush=True)
+        print(f"[Monitor] Created logging directory: '{log_dir}/'", flush=True)
 
     files = [pcap_file_path, slog_file_path]
 
@@ -49,7 +49,7 @@ def setup_log_directory(log_dir, pcap_file_path, slog_file_path, max_backups=2):
         if os.path.exists(target) and os.path.getsize(target) > 0:
             shutil.move(target, f"{target}.1")
 
-    print(f"[Agent] Rotated historical logs (max backups: {max_backups})", flush=True)
+    print(f"[Monitor] Rotated historical logs (max backups: {max_backups})", flush=True)
 
 def configure_kernel_headers_for_vfio_user_pkt_sniffer():
     """Setup BPF kernel headers for multiple distributions."""
@@ -77,7 +77,7 @@ def configure_kernel_headers_for_vfio_user_pkt_sniffer():
             print("[!] Kernel headers extracted at {build_path} from archive")
             return True
 
-        print("[Agent] Reconstructing WSL2 upstream kernel headers from upstream repository archives...")
+        print("[Monitor] Reconstructing WSL2 upstream kernel headers from upstream repository archives...")
         subprocess.run(["sudo", "apt-get", "update"], check=True)
         subprocess.run(["sudo", "apt-get", "install", "-y", "flex", "bison", "libelf-dev", "libssl-dev", "bc"], check=True)
 
@@ -189,11 +189,11 @@ def start_vfio_user_pkt_sniffer(project_root, pcap_file_path, slog_file_path, so
     """Launch sockdump as a background root process to capture
        low-level IPC data going across the UDS channel."""
 
-    print(f"[Agent] Arming vfio-user packet sniffer on {socket_path} writing to {pcap_file_path}", flush=True)
+    print(f"[Monitor] Arming vfio-user packet sniffer on {socket_path} writing to {pcap_file_path}", flush=True)
 
     sockdump = os.path.join(project_root, "tools", "net", "sockdump.py")
 
-    print(f"[Agent] Starting {sockdump} with user output to {slog_file_path}", flush=True)
+    print(f"[Monitor] Starting {sockdump} with user output to {slog_file_path}", flush=True)
 
     with open(pcap_file_path, "w"): pass
 
@@ -223,10 +223,10 @@ def start_vfio_user_pkt_sniffer(project_root, pcap_file_path, slog_file_path, so
         proc.pcap_file_path = pcap_file_path
         proc.wireshark_proc = None
         proc.wlog_fd = None
-        print("[Agent] Waiting for sniffer to start...", flush=True)
+        print("[Monitor] Waiting for sniffer to start...", flush=True)
         time.sleep(3.0) # Allow the sniffer enough time to initialize and bind to the socket
         if proc.poll() is not None:
-            print(f"\033[31m[Agent] ERROR: Sniffer terminated early with exit code {proc.returncode}\033[0m", flush=True)
+            print(f"\033[31m[Monitor] ERROR: Sniffer terminated early with exit code {proc.returncode}\033[0m", flush=True)
             try:
                 fd.seek(0)
                 err = fd.read()
@@ -236,11 +236,11 @@ def start_vfio_user_pkt_sniffer(project_root, pcap_file_path, slog_file_path, so
             fd.close()
             return None
 
-        print(f"[Agent] Sniffer process started with PID {proc.pid}")
+        print(f"[Monitor] Sniffer process started with PID {proc.pid}")
         return proc
 
     except Exception as ex:
-        print(f"\033[31m[Agent] ERROR: Failed to spawn sockdump sniffer: {ex}\033[0m", flush=True)
+        print(f"\033[31m[Monitor] ERROR: Failed to spawn sockdump sniffer: {ex}\033[0m", flush=True)
         if 'fd' in locals():
             fd.close()
         return None
@@ -333,7 +333,7 @@ def stop_vfio_user_pkt_sniffer(sniffer_proc):
                 time.sleep(0.1)
 
             if not terminated:
-                print("[Agent] Forcing sniffer kill...", flush=True)
+                print("[Monitor] Forcing sniffer kill...", flush=True)
                 try:
                     os.killpg(sniffer_proc.pid, signal.SIGKILL)
                 except Exception:
@@ -341,7 +341,7 @@ def stop_vfio_user_pkt_sniffer(sniffer_proc):
                 sniffer_proc.wait(timeout=1)
 
     except Exception as ex:
-        print(f"\n\033[91m[Agent] FATAL: Exception thrown during sniffer teardown: {ex}\033[0m")
+        print(f"\n\033[91m[Monitor] FATAL: Exception thrown during sniffer teardown: {ex}\033[0m")
         traceback.print_exc()
     finally:
         if hasattr(sniffer_proc, 'slog_fd') and sniffer_proc.slog_fd:
@@ -357,9 +357,9 @@ def stop_vfio_user_pkt_sniffer(sniffer_proc):
         os.system(f"sudo chown {user}:{group} {sniffer_proc.pcap_file_path}")
         os.system(f"sudo chmod 664 {sniffer_proc.pcap_file_path}")
         size = os.path.getsize(sniffer_proc.pcap_file_path)
-        print(f"[Agent] Packet trace size: {size} bytes committed to log tree")
+        print(f"[Monitor] Packet trace size: {size} bytes committed to log tree")
     else:
-        print(f"\033[31m[Agent] ERROR: pcap file not found at {sniffer_proc.pcap_file_path}\033[0m")
+        print(f"\033[31m[Monitor] ERROR: pcap file not found at {sniffer_proc.pcap_file_path}\033[0m")
 
     try:
         import glob
@@ -373,6 +373,6 @@ def stop_vfio_user_pkt_sniffer(sniffer_proc):
                 pass
 
         if temp_files:
-            print(f"[Agent] Removed {len(temp_files)} temporary Wireshark swap files from /tmp", flush=True)
+            print(f"[Monitor] Removed {len(temp_files)} temporary Wireshark swap files from /tmp", flush=True)
     except Exception:
         pass
