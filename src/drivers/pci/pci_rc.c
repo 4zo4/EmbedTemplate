@@ -107,13 +107,10 @@ static inline void pcie_write_config_word(uint8_t bus, uint8_t dev, uint8_t func
     ECAM_ADDR16(address_offset) = value;
 }
 
-void pci_scan(uint8_t bus)
+static void do_pci_scan(uint8_t bus)
 {
     pci_device_info_t *pci_devices = pci_db.device_info;
     pci_bridge_info_t *pci_bridges = pci_db.bridge_info;
-
-    if (pci_db.flags & PCI_SCANNED)
-        return;
 
     for (uint8_t dev = 0; dev < MAX_PCI_DEVICES; dev++) {
         uint32_t id_reg_f0 = pcie_read_config_dword(bus, dev, 0, 0x00);
@@ -135,7 +132,6 @@ void pci_scan(uint8_t bus)
                 continue;
 
             if (pci_db.device_count >= MAX_PCI_DEVICES) {
-                pci_db.flags |= PCI_SCANNED;
                 printf("\r[PCI Scan] Maximum device limit reached, skipping further enumeration.\n");
                 return;
             }
@@ -217,7 +213,6 @@ void pci_scan(uint8_t bus)
                 pci_db.device_count++;
             } else if (hdr_type == PCI_HEADER_TYPE_BRIDGE) {
                 if (pci_db.bridge_count >= MAX_PCI_BRIDGES) {
-                    pci_db.flags |= PCI_SCANNED;
                     printf("\r[PCI Scan] Maximum bridges limit reached, skipping further enumeration.\n");
                     return;
                 }
@@ -243,11 +238,19 @@ void pci_scan(uint8_t bus)
                 pci_db.bridge_count++;
                 // Recursively traverse downstream
                 if (secondary_bus > bus) {
-                    pci_scan(secondary_bus);
+                    do_pci_scan(secondary_bus);
                 }
             }
         }
     }
+}
+
+void pci_scan(uint8_t bus)
+{
+    if (pci_db.flags & PCI_SCANNED)
+        return;
+    do_pci_scan(bus);
+    pci_db.flags |= PCI_SCANNED;
 }
 
 void pci_alloc(void)
