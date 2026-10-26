@@ -6,12 +6,17 @@
 
 #include "init.h"
 
+void init_profiler(void); // prototype without include file
+
 int init_hw(void)
 {
 #ifdef BARE_METAL
     if (init_port_globals)
         init_port_globals();
     init_timestamp();
+#ifdef ENABLE_PROF
+    init_profiler();
+#endif
 #ifndef ENABLE_RTOS
     init_systick();
 #endif

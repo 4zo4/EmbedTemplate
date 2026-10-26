@@ -107,6 +107,7 @@ endif()
 # --- CLI (cli_lib) ---
 set(TARGET_CLI_INC_DIRS
     ${THIS_DIR}/include
+    ${THIS_DIR}/include/diagnostic/profiler
     ${ARCH_INC_DIR}
     ${CLI_INC_DIR}
     ${DRV_INC_DIR}
@@ -134,6 +135,9 @@ else()
 endif()
 if(ENABLE_SIM)
     target_compile_definitions(cli_lib PRIVATE ENABLE_SIM)
+endif()
+if(ENABLE_PROF)
+    target_compile_definitions(cli_lib PRIVATE ENABLE_PROF)
 endif()
 # CLI uses embedded cli lib
 target_link_libraries(cli_lib PUBLIC embedded_cli_lib)
@@ -184,7 +188,19 @@ set_source_files_properties(
     ${THIS_DIR}/src/diagnostic/logging/log_infra.c
     PROPERTIES COMPILE_OPTIONS "-Wno-stringop-overflow"
 )
+if(ENABLE_PROF)
+set_source_files_properties(
+    ${THIS_DIR}/src/diagnostic/logging/log_infra.c
+    PROPERTIES COMPILE_FLAGS "-finstrument-functions -fno-inline"
+)
+endif()
 target_compile_options(infra_lib PRIVATE -ffreestanding -fno-builtin -O3)
+
+if(ENABLE_PROF)
+    add_subdirectory(src/diagnostic/profiler)
+    target_link_libraries(infra_lib PRIVATE profiler_lib)
+    set_target_properties(infra_lib PROPERTIES LINKER_LANGUAGE CXX)
+endif()
 
 # --- Embedded CLI (embedded_cli_lib) ---
 if(CLI)

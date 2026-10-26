@@ -17,6 +17,7 @@
 #include "log.h"
 #include "log_marker.h"
 #include "pack.h"
+#include "profiler.h"
 #include "utils.h"
 
 // prototypes without include file
@@ -322,6 +323,49 @@ void show_stats_log(EmbeddedCli *cli, char *args, int count)
     snprintf(msg, sizeof(msg), "Log Statistics: total logs %lu, dropped %u", stats.sum, stats.drop_cnt);
     embeddedCliPrint(cli, msg);
 }
+
+#if defined(ENABLE_PROF)
+static void fmt_timestamp(char *buf, size_t buf_sz, uint64_t ts)
+{
+    uint32_t us = (uint32_t)(ts % 1000000);
+    uint32_t tsec = (uint32_t)(ts / 1000000);
+
+    uint32_t sec = tsec % 60;
+    uint32_t min = (tsec / 60) % 60;
+    uint32_t hour = (tsec / 3600) % 24;
+    uint32_t days = tsec / 86400;
+
+    if (days > 0) {
+        snprintf(buf, buf_sz, "%03ud:%02uh:%02um:%02u.%06us", days, hour, min, sec, us);
+    } else if (hour > 0) {
+        snprintf(buf, buf_sz, "%02uh:%02um:%02u.%06us", hour, min, sec, us);
+    } else if (min > 0) {
+        snprintf(buf, buf_sz, "%02um:%02u.%06us", min, sec, us);
+    } else {
+        snprintf(buf, buf_sz, "%02u.%06us", sec, us);
+    }
+}
+void show_stats_prof(EmbeddedCli *cli, char *args, int count)
+{
+    alignas(8) prof_stats_t stats[16];
+
+    int batch_count = (int)(sizeof(stats) / sizeof(stats[0]));
+    prof_get_stats(stats, &batch_count);
+
+    for (int i = 0; i < batch_count; i++) {
+        char msg[256];
+        char ts_start[32], ts_end[32];
+        fmt_timestamp(ts_start, sizeof(ts_start), stats[i].ts_start);
+        fmt_timestamp(ts_end, sizeof(ts_end), stats[i].ts_end);
+        // clang-format off
+        snprintf(msg, sizeof(msg), "Func %p: min %u, max %u, avg %u us, %u samples, start %s, end %s",
+            (void *)stats[i].func_addr, stats[i].min_duration, stats[i].max_duration,
+            stats[i].avg_duration, stats[i].sample_count, ts_start, ts_end);
+        // clang-format on
+        embeddedCliPrint(cli, msg);
+    }
+}
+#endif
 
 void show_stats_task(EmbeddedCli *cli, char *args, int count)
 {
@@ -755,7 +799,11 @@ static const cmd_comp_desc_t set_cmd_desc = {
  * - Note: Level 3 (options) and Specs are indexed via action_idx calculation.
  */
 static const char *show_cmd_compo_1[] = {"stats", "config", "version", "domains", "entities", "levels", nullptr};
+#if defined(ENABLE_PROF)
+static const char *show_cmd_compo_1_1[] = {"log", "sys", "task", "prof", nullptr}; // 'show stats ...'
+#else
 static const char *show_cmd_compo_1_1[] = {"log", "sys", "task", nullptr}; // 'show stats ...'
+#endif
 #if defined(ENABLE_RTOS) && defined(ENABLE_SIM)
 static const char *show_cmd_compo_1_2[] = {"", "short", "sim", "log", nullptr}; // 'show config ...'
 #else
@@ -826,7 +874,9 @@ static void (*show_cmd_action[])(EmbeddedCli *cli, char *args, int count) = {
     show_stats_log,  // [0] show stats log [clear]
     show_stats_sys,  // [1] show stats sys
     show_stats_task, // [2] show stats task
-
+#if defined(ENABLE_PROF)
+    show_stats_prof, // [3] show stats prof
+#endif
     show_config,       // [3] show config (hybrid: leaf + path)
     show_config_short, // [4] show config short
 #if defined(ENABLE_RTOS) && defined(ENABLE_SIM)
@@ -935,7 +985,7 @@ bool do_sub_completion(EmbeddedCli *cli, const char **options, const char *token
     return false;
 }
 
-static int find_index_by_str(const char **list, const char *str)
+static int find_index_by(const char **list, const char *str)
 {
     if (!list || !str)
         return -1;
@@ -998,11 +1048,11 @@ static void do_cmd_arg_completion_dispatch(EmbeddedCli *cli, const char *token, 
         if (!arg1 || !arg2)
             goto is_special_handling;
 
-        int l1_idx = find_index_by_str(comp->level1, arg1);
+        int l1_idx = find_index_by(comp->level1, arg1);
 
         if (l1_idx != -1) {
             const char **l2_subcmd = comp->level2[l1_idx];
-            int          l2_idx = find_index_by_str(l2_subcmd, arg2);
+            int          l2_idx = find_index_by(l2_subcmd, arg2);
 
             bool is_hybrid = (l2_subcmd && l2_subcmd[0] && l2_subcmd[0][0] == '\0');
             if (l2_idx == -1 && is_hybrid && comp->spec_idx != 0)
@@ -1062,7 +1112,7 @@ static void cmd_dispatch(EmbeddedCli *cli, char *args, int count, const cmd_comp
 
     DEF_BREADCRUMB(breadcrumb, 8);
     const char *arg1 = embeddedCliGetToken(args, 1);
-    int         l1_idx = find_index_by_str(desc->comp.level1, arg1);
+    int         l1_idx = find_index_by(desc->comp.level1, arg1);
     if (l1_idx == -1)
         return (void)embeddedCliPrint(cli, invalid);
 
@@ -1075,7 +1125,7 @@ static void cmd_dispatch(EmbeddedCli *cli, char *args, int count, const cmd_comp
     bool        is_hybrid = (l2_subcmd && l2_subcmd[0] && l2_subcmd[0][0] == '\0');
 
     if (arg2 && !(help && count == 2))
-        l2_idx = find_index_by_str(l2_subcmd, arg2);
+        l2_idx = find_index_by(l2_subcmd, arg2);
 
     if (l2_idx == -1 && is_hybrid && !arg2)
         l2_idx = 0;
@@ -1170,7 +1220,7 @@ static void cmd_dispatch(EmbeddedCli *cli, char *args, int count, const cmd_comp
     if (arg3 && !l3_opts)
         return (void)embeddedCliPrint(cli, error);
 
-    if (arg3 && l3_opts && find_index_by_str(l3_opts, arg3) == -1)
+    if (arg3 && l3_opts && find_index_by(l3_opts, arg3) == -1)
         return (void)embeddedCliPrint(cli, invalid);
 
     // Final check for unexpected 4th token in standard commands
