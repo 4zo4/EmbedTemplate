@@ -10,6 +10,7 @@
 
 // #define DEBUG // Uncomment to enable debug data collection and breadcrumb tracking for the logger operations
 
+#include "arch_ops.h"
 #include "assert.h"
 #include "log.h"
 #include "log_marker.h"
@@ -128,11 +129,21 @@ alignas(8) DEF_BREADCRUMB(write_breadcrumb, 32);
 
 // -- End of globals --
 
+#ifdef DEBUG
+#define copy_u64(dst, src, len) copy_u64_dbg(dst, src, len, __func__, __LINE__)
+static inline void copy_u64_dbg(void *dst, const void *src, uint32_t len, const char *call_site, int line)
+#else
 static inline void copy_u64(void *dst, const void *src, uint32_t len)
+#endif
 {
     uint8_t       *d = (uint8_t *)dst;
     const uint8_t *s = (const uint8_t *)src;
 
+#ifdef DEBUG
+    if (len >= 8 && ((uintptr_t)src & 0x7) != 0) {
+        printf("\r%s:%d:%s: " UI_COLOR_RED "[LOG] Error: " UI_STYLE_RESET "source address %p is not 8-byte aligned for %u bytes copy\n", call_site, line, __func__, src, len);
+    }
+#endif
     // 64-bit (QWORD) Copy - High Speed
     while (len >= 8) {
         *(uint64_t *)d = *(const uint64_t *)s;
@@ -140,6 +151,8 @@ static inline void copy_u64(void *dst, const void *src, uint32_t len)
         s += 8;
         len -= 8;
     }
+
+    memory_barrier();
 
     // 32-bit (DWORD) Copy - Remainder
     if (len >= 4) {
@@ -255,14 +268,14 @@ static inline void aligned_zero_padding(uint32_t end_pos, uint8_t pad_len)
             hid += 1;
         }
         if (align_bytes >= 2) {
-            *(volatile uint16_t *)(&log_ring.data[hid]) = 0;
+            *(uint16_t *)(&log_ring.data[hid]) = 0;
             hid += 2;
         }
         pad_len -= align_bytes;
     }
 
     if (pad_len >= 4) {
-        *(volatile uint32_t *)(&log_ring.data[hid]) = 0;
+        *(uint32_t *)(&log_ring.data[hid]) = 0;
         hid += 4;
         pad_len -= 4;
     }
@@ -372,15 +385,19 @@ void log_dispatch(uint8_t domain, uint8_t entity, uint8_t level, const char *fmt
         copy_to_ring(start_pos, &hdr, HDR_SIZE);
     }
 
-    if (hid <= (log_ring.size - (HDR_SIZE + 4))) {
+    if (hid <= (log_ring.size - tot_size)) {
         *(uint32_t *)(&log_ring.data[hid + HDR_SIZE]) = *(uint32_t *)(write_data.buf);
-        if (len > 4) {
-            copy_to_ring(start_pos + HDR_SIZE + 4, write_data.buf + 4, len - 4);
-        }
     } else {
-        copy_to_ring(start_pos + HDR_SIZE, write_data.buf, len);
+        if (hid <= (log_ring.size - (HDR_SIZE + 4))) {
+            *(uint32_t *)(&log_ring.data[hid + HDR_SIZE]) = *(uint32_t *)(write_data.buf);
+        } else {
+            copy_to_ring(start_pos + HDR_SIZE, write_data.buf, 4);
+        }
     }
 
+    if (len > 4) {
+        copy_to_ring(start_pos + HDR_SIZE + 4, write_data.buf + 4, len - 4);
+    }
     aligned_zero_padding(start_pos + HDR_SIZE + len, pad_len);
 
     atomic_store_explicit((_Atomic uint8_t *)&log_ring.data[hid], LOG_TAG_SEAL, memory_order_release);
@@ -441,9 +458,11 @@ void log_flash(log_writer_t writer)
         }
 
         if (tid <= (log_ring.size - HDR_SIZE)) {
+            // Split header read into 64-bit and 32-bit read ops
             *(uint64_t *)&hdr = *(uint64_t *)(&log_ring.data[tid]);
             *(uint32_t *)((uint8_t *)&hdr + 8) = *(uint32_t *)(&log_ring.data[tid + 8]);
         } else {
+            // Header is wrapped around the end of the ring buffer, so we need to copy it in two parts
             copy_from_ring(&hdr, tail, HDR_SIZE);
         }
 
@@ -454,6 +473,7 @@ void log_flash(log_writer_t writer)
 
         uint64_t ts = ((uint64_t)hdr.ts_high << 32) | hdr.ts_low;
 
+        // Read 1st 4 bytes of the payload from the ring buffer to ensure 8-byte alignment for the rest of the payload read
         *(uint32_t *)(read_data.buf) = *(uint32_t *)(&log_ring.data[tid + HDR_SIZE]);
         if (hdr.len > 4) {
             copy_from_ring(read_data.buf + 4, tail + HDR_SIZE + 4, hdr.len - 4);
