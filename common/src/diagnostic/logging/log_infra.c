@@ -151,9 +151,9 @@ static inline void copy_u64(void *dst, const void *src, uint32_t len)
         s += 8;
         len -= 8;
     }
-
+#ifndef ARCH_X86
     memory_barrier();
-
+#endif
     // 32-bit (DWORD) Copy - Remainder
     if (len >= 4) {
         *(uint32_t *)d = *(const uint32_t *)s;

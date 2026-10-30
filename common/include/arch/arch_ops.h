@@ -100,7 +100,7 @@
     #ifdef __x86_64__
     #define INCODE
     #else // 32-bit x86
-    #define INCODE ".code32\n\t"
+    #define INCODE ".code32\n\t "
     #endif
     static inline uint32_t disable_interrupts(void) {
         #ifdef __x86_64__
