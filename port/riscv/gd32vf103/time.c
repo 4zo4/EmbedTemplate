@@ -52,17 +52,7 @@
 
 static uint64_t boot_ts = 0;
 
-void init_timestamp(void)
-{
-    if (initialized & TIMESTAMP_INITIALIZED)
-        return;
-    // Machine timer starts at reset; no specific init required for mtime
-    initialized |= TIMESTAMP_INITIALIZED;
-    log_set_level(DOMAIN_SYS, ENTITY_TIMER, LOG_LEVEL_INFO);
-    LOG_SYS_INFO("Timestamp initialized");
-}
-
-uint64_t get_timestamp48(void)
+static uint64_t get_timestamp(void)
 {
     uint32_t hi, lo;
     do {
@@ -71,12 +61,30 @@ uint64_t get_timestamp48(void)
     } while (hi != MTIME_HI);
 
     uint64_t now = (((uint64_t)hi) << 32) | lo;
+    return now;
+}
 
-    if (boot_ts == 0) {
-        boot_ts = now;
-    }
+void init_timestamp(void)
+{
+    if (initialized & TIMESTAMP_INITIALIZED)
+        return;
+    // Machine timer starts at reset; no specific init required for mtime
+    boot_ts = get_timestamp();
+    initialized |= TIMESTAMP_INITIALIZED;
+    log_set_level(DOMAIN_SYS, ENTITY_TIMER, LOG_LEVEL_INFO);
+    LOG_SYS_INFO("Timestamp initialized");
+}
 
+uint64_t get_timestamp48(void)
+{
+    uint64_t now = get_timestamp();
     return (now - boot_ts) & 0xFFFFFFFFFFFFULL;
+}
+
+uint64_t get_timestamp64(void)
+{
+    uint64_t now = get_timestamp();
+    return (now - boot_ts);
 }
 
 #ifndef ENABLE_RTOS

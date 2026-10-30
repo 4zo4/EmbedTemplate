@@ -4,7 +4,7 @@
 
 static uint64_t boot_ts = 0;
 
-uint64_t get_timestamp48(void)
+static uint64_t get_timestamp(void)
 {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -13,5 +13,17 @@ uint64_t get_timestamp48(void)
     if (boot_ts == 0)
         boot_ts = now;
 
+    return now;
+}
+
+uint64_t get_timestamp48(void)
+{
+    uint64_t now = get_timestamp();
     return (now - boot_ts) & 0xFFFFFFFFFFFFULL;
+}
+
+uint64_t get_timestamp64(void)
+{
+    uint64_t now = get_timestamp();
+    return (now - boot_ts);
 }

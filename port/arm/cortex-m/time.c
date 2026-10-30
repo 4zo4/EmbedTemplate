@@ -12,6 +12,7 @@
 #include <stdio.h>
 
 #include "assert.h"
+#include "arch_ops.h"
 #include "common.h"
 #include "event.h"
 #include "init.h"
@@ -42,6 +43,7 @@ uint32_t get_hw_timer_cycles(void);
 alignas(8) volatile uintptr_t cpu_hz;
 alignas(8) volatile uintptr_t timer_hz;
 alignas(8) static uint64_t boot_ts = 0;
+alignas(8) static uint64_t ticks_to_us = 0;
 alignas(8) static uint64_t total_cycles = 0;
 static uint32_t last_cycles = 0;
 static bool     hw_timer = false;
@@ -60,20 +62,23 @@ void init_timestamp(void)
     DWT_CYCCNT = 0;               // Reset cycle counter
     DWT_CONTROL |= DWT_CYCCNTENA; // Start cycle counter
 
-    boot_ts = 0;
-    total_cycles = 0;
-
+    // Run a few idle cycles to allow DWT to incremet its cycle counter
     for (volatile int i = 0; i < 100; i++) {
         NOP();
     }
 
+    // Check if DWT cycle counter is incrementing
     last_cycles = DWT_CYCCNT;
     if (last_cycles) {
-        timer_hz = CPU_HZ;
-    } else {
+        timer_hz = CPU_HZ; // DWT cycle counter is active
+    } else {               // DWT cycle counter isn't active, fallback to hardware timer
         last_cycles = init_hw_timer(&timer_hz);
         hw_timer = true;
     }
+
+    ticks_to_us = (1000000ULL << 32) / timer_hz;
+    total_cycles = last_cycles;
+    boot_ts = (total_cycles * ticks_to_us) >> 32;
 
     initialized |= TIMESTAMP_INITIALIZED;
     log_set_level(DOMAIN_SYS, ENTITY_TIMER, LOG_LEVEL_INFO);
@@ -83,19 +88,28 @@ void init_timestamp(void)
     // clang-format on
 }
 
+static uint64_t get_timestamp(void)
+{
+    uint64_t local_total_cycles;
+    uint32_t cycles = hw_timer ? get_hw_timer_cycles() : DWT_CYCCNT;
+    uint32_t primask = disable_interrupts();
+    uint32_t delta = cycles - last_cycles;
+    total_cycles += delta;
+    last_cycles = cycles;
+    local_total_cycles = total_cycles;
+    restore_interrupts(primask);
+    uint64_t now = (local_total_cycles * ticks_to_us) >> 32;
+    return (now - boot_ts);
+}
+
 uint64_t get_timestamp48(void)
 {
-    uint32_t cycles = hw_timer ? get_hw_timer_cycles() : DWT_CYCCNT;
-    uint32_t delta = cycles - last_cycles;
-    last_cycles = cycles;
-    total_cycles += delta;
-    uint64_t now = (total_cycles * 1000000ULL) / timer_hz;
+    return get_timestamp() & 0xFFFFFFFFFFFFULL;
+}
 
-    if (boot_ts == 0) {
-        boot_ts = now;
-    }
-
-    return (now - boot_ts) & 0xFFFFFFFFFFFFULL;
+uint64_t get_timestamp64(void)
+{
+    return get_timestamp();
 }
 
 // System Tick (SysTick) Configuration Registers Definitions for Cortex-M

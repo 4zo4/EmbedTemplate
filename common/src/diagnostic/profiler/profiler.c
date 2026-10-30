@@ -11,7 +11,7 @@
 
 #define PROF_STOP UINT32_MAX
 
-uint64_t get_timestamp48(void); // prototype without include file
+uint64_t get_timestamp64(void); // prototype without include file
 
 atomic_uint_fast32_t next_sample = 0;
 alignas(8) prof_sample_t prof_sample_pool[MAX_PROF_SAMPLES];
@@ -91,7 +91,7 @@ void __attribute__((no_instrument_function)) __cyg_profile_func_enter(void *func
 
     prof_sample_t *sample = &prof_sample_pool[pool_idx];
     atomic_store_explicit(&sample->entry.ll, PROF_NULL_INDEX, memory_order_relaxed);
-    sample->entry.ts = get_timestamp48();
+    sample->entry.ts = get_timestamp64();
 
     prof_node_t *func_node = &prof_table[tbl_idx];
     uint32_t     tail = atomic_load_explicit(&func_node->tail, memory_order_relaxed);
@@ -126,7 +126,7 @@ void __attribute__((no_instrument_function)) __cyg_profile_func_exit(void *func_
         return; // No entry recorded for this function, possibly due to overflow
 
     prof_sample_t *sample = &prof_sample_pool[pool_idx];
-    sample->exit.ts = get_timestamp48();
+    sample->exit.ts = get_timestamp64();
 }
 
 static uint32_t prof_stop(void)

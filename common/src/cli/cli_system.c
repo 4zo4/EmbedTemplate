@@ -327,13 +327,14 @@ void show_stats_log(EmbeddedCli *cli, char *args, int count)
 #if defined(ENABLE_PROF)
 static void fmt_timestamp(char *buf, size_t buf_sz, uint64_t ts)
 {
-    uint32_t us = (uint32_t)(ts % 1000000);
-    uint32_t tsec = (uint32_t)(ts / 1000000);
+    uint64_t total_us = ts % 1000000ULL;
+    uint64_t total_sec = ts / 1000000ULL;
 
-    uint32_t sec = tsec % 60;
-    uint32_t min = (tsec / 60) % 60;
-    uint32_t hour = (tsec / 3600) % 24;
-    uint32_t days = tsec / 86400;
+    uint32_t us = (uint32_t)total_us;
+    uint32_t sec = (uint32_t)(total_sec % 60ULL);
+    uint32_t min = (uint32_t)((total_sec / 60ULL) % 60ULL);
+    uint32_t hour = (uint32_t)((total_sec / 3600ULL) % 24ULL);
+    uint32_t days = (uint32_t)(total_sec / 86400ULL);
 
     if (days > 0) {
         snprintf(buf, buf_sz, "%03ud:%02uh:%02um:%02u.%06us", days, hour, min, sec, us);
@@ -347,7 +348,7 @@ static void fmt_timestamp(char *buf, size_t buf_sz, uint64_t ts)
 }
 void show_stats_prof(EmbeddedCli *cli, char *args, int count)
 {
-    alignas(8) prof_stats_t stats[16];
+    alignas(8) static prof_stats_t stats[16];
 
     int batch_count = (int)(sizeof(stats) / sizeof(stats[0]));
     prof_get_stats(stats, &batch_count);

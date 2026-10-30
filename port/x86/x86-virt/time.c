@@ -23,20 +23,16 @@
 #define PIT_BASE_FREQUENCY 1193182UL // The fixed physical oscillator crystal frequency
 
 // Local APIC Timer Registers
-#define LAPIC_LVT_TIMER_REG (*(volatile uint32_t *)(0xFEE00000UL + 0x0320))
-#define LAPIC_TIMER_INIT_REG (*(volatile uint32_t *)(0xFEE00000UL + 0x0380))
-#define LAPIC_TIMER_DIV_REG (*(volatile uint32_t *)(0xFEE00000UL + 0x03E0))
+#define LAPIC_BASE_ADDRESS 0xFEE00000UL
+#define LAPIC_LVT_TIMER_REG (*(volatile uint32_t *)(LAPIC_BASE_ADDRESS + 0x0320))
+#define LAPIC_TIMER_INIT_REG (*(volatile uint32_t *)(LAPIC_BASE_ADDRESS + 0x0380))
+#define LAPIC_TIMER_DIV_REG (*(volatile uint32_t *)(LAPIC_BASE_ADDRESS + 0x03E0))
+#define LAPIC_TIMER_CUR_REG (*(volatile uint32_t *)(LAPIC_BASE_ADDRESS + 0x390))
 
 alignas(8) static uint64_t boot_ts = 0;
+alignas(8) static uint64_t ticks_to_us = 0;
 
-// read rdtsc (Read Time-Stamp Counter)
-static inline uint64_t rdtsc(void)
-{
-    uint32_t lo, hi;
-    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
-    return ((uint64_t)hi << 32) | lo;
-}
-
+#ifdef ENABLE_PIT
 void init_pit_timer(uint32_t tick_rate_hz)
 {
     uint32_t divisor = PIT_BASE_FREQUENCY / tick_rate_hz;
@@ -54,7 +50,7 @@ void init_pit_timer(uint32_t tick_rate_hz)
     outb(PIT_PORT_CHANNEL0, (uint8_t)(divisor & 0xFF));
     outb(PIT_PORT_CHANNEL0, (uint8_t)((divisor >> 8) & 0xFF));
 }
-
+#else // LAPIC
 void init_local_apic_timer(void)
 {
     // 1. Configure the Local APIC Timer internal divider scale to 16 (value 0x03)
@@ -68,32 +64,83 @@ void init_local_apic_timer(void)
     // QEMU LAPIC bus clock (1GHz) / divide ratio (16) / 1000Hz target = 62500 ticks per millisecond
     LAPIC_TIMER_INIT_REG = 62500UL;
 }
+#endif
 
+// Wait for 1 millisecond using the LAPIC timer's current count register
+// Requires subsequent calls to align lapic timer rollover point
+static inline void wait_1ms(void)
+{
+    uint32_t initial_sample = LAPIC_TIMER_CUR_REG;
+
+    while (LAPIC_TIMER_CUR_REG <= initial_sample) {
+        NOP();
+    }
+}
+
+// read rdtsc (Read Time-Stamp Counter)
+static inline uint64_t rdtsc(void)
+{
+    uint32_t lo, hi;
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
+}
+
+// calibrate rdtsc timer ticks cycles for 1 millisecond conversion
+static uint32_t calibrate_rdtsc_timer(void)
+{
+    // wait to start at a clean lapic timer rollover point
+    wait_1ms();
+
+    const uint32_t cal_window_ms = 50;
+    uint64_t       cal_start = rdtsc();
+
+    for (uint32_t ms = 0; ms < cal_window_ms; ms++) {
+        wait_1ms();
+    }
+
+    uint64_t cal_end = rdtsc();
+    uint64_t delta = cal_end - cal_start;
+
+    // calculate the number of rdtsc timer cycles per millisecond
+    return delta * (1000 / cal_window_ms);
+}
+
+// clang-format off
 void init_timestamp(void)
 {
     if (initialized & TIMESTAMP_INITIALIZED)
         return;
-    boot_ts = rdtsc();
+    uint64_t init_ticks = rdtsc();
 #ifdef ENABLE_PIT
 #define SYS_TICK_IRQ_ID PIT_IRQ_ID
     init_pit_timer(1000);
+    // TODO: calibrate PIT timer
+    static_assert(0, "PIT timer unsupported")
 #else // LAPIC
 #define SYS_TICK_IRQ_ID LAPIC_TIMER_IRQ_ID
     init_local_apic_timer();
+    uint64_t timer_hz = calibrate_rdtsc_timer();
+    ticks_to_us = (1000000ULL << 32) / timer_hz;
+    boot_ts = (init_ticks * ticks_to_us) >> 32;
 #endif
     initialized |= TIMESTAMP_INITIALIZED;
     log_set_level(DOMAIN_SYS, ENTITY_TIMER, LOG_LEVEL_INFO);
     LOG_TIME_INFO("Timestamp initialized");
 }
+// clang-format on
 
 uint64_t get_timestamp48(void)
 {
-    uint64_t now = rdtsc();
-
-    if (boot_ts == 0)
-        boot_ts = now;
-
+    uint64_t ticks = rdtsc();
+    uint64_t now = (ticks * ticks_to_us) >> 32;
     return (now - boot_ts) & 0xFFFFFFFFFFFFULL;
+}
+
+uint64_t get_timestamp64(void)
+{
+    uint64_t ticks = rdtsc();
+    uint64_t now = (ticks * ticks_to_us) >> 32;
+    return (now - boot_ts);
 }
 
 #ifndef ENABLE_RTOS

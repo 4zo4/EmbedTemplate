@@ -33,6 +33,7 @@
 // user port have to set platform-specific CPU System Clock Speed
 alignas(8) volatile uintptr_t cpu_hz;
 alignas(8) static uint64_t boot_ts = 0;
+alignas(8) static uint64_t ticks_to_us = 0;
 alignas(8) static uint32_t timer_1ms_ticks = 0;
 
 // -- End of globals --
@@ -50,21 +51,31 @@ void init_timestamp(void)
 
     boot_ts = ticks / (CPU_HZ / 1000000ULL);
     timer_1ms_ticks = CPU_HZ / 1000U;
+    ticks_to_us = (1000000ULL << 32) / CPU_HZ;
 
     initialized |= TIMESTAMP_INITIALIZED;
     log_set_level(DOMAIN_SYS, ENTITY_TIMER, LOG_LEVEL_INFO);
     LOG_TIME_INFO("Timestamp initialized");
 }
 
-uint64_t get_timestamp48(void)
+static inline uint64_t get_timestamp(void)
 {
     uint32_t low, high;
 
     __asm volatile("mrrc p15, 0, %0, %1, c14" : "=r"(low), "=r"(high));
     uint64_t ticks = ((uint64_t)high << 32) | low;
-    uint64_t now = ticks / (CPU_HZ / 1000000ULL);
+    uint64_t now = (ticks * ticks_to_us) >> 32;
+    return (now - boot_ts);
+}
 
-    return (now - boot_ts) & 0xFFFFFFFFFFFFULL;
+uint64_t get_timestamp48(void)
+{
+    return get_timestamp() & 0xFFFFFFFFFFFFULL;
+}
+
+uint64_t get_timestamp64(void)
+{
+    return get_timestamp();
 }
 
 #ifndef ENABLE_RTOS
