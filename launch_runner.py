@@ -122,7 +122,7 @@ def compile_firmware(target_chip, opt_args, verbose=False):
         print(f"\033[91m[Monitor] Error: Compilation failed: {e}\033[0m")
         sys.exit(1)
 
-def start_pcie_cosim_bridge():
+def start_pcie_cosim_bridge(debug=False):
     """Start PCIe Co-Simulation Bridge."""
     project_root = Path(__file__).resolve().parent
     parent_dir = project_root.parent
@@ -141,21 +141,26 @@ def start_pcie_cosim_bridge():
         return None
 
     pcie_cosim_root = pcie_cosim_source_path.parents[2]
-    bridge_bin = pcie_cosim_root / "build" / "pcie_sim"
-    if not bridge_bin.exists():
-        print(f"[Monitor] PCI-Bridge image not found. Compiling {bridge_bin}...")
+    bridge_image = pcie_cosim_root / "build" / "pcie_sim"
+    if not bridge_image.exists():
+        print(f"[Monitor] PCI-Bridge image not found. Compiling {bridge_image}...")
         try:
-            subprocess.run(["make"], cwd=pcie_cosim_root, check=True)
+            make_cmd = ["make", "debug"] if debug else ["make"]
+            subprocess.run(make_cmd, cwd=pcie_cosim_root, check=True)
         except subprocess.CalledProcessError as e:
-            print(f"[🗙 Error] Compilation failed for {bridge_bin}: {e}")
+            print(f"[🗙 Error] Compilation failed for {bridge_image}: {e}")
             return None
+
+    if debug:
+        return None
 
     print("\033[92m[Monitor] Spawning Terminal for PCI-Bridge...\033[0m")
 
     current_env = os.environ.copy()
+
     bridge_cmd = [
         "xterm", "-hold", "-title", f"PCIe Co-Simulation Bridge",
-        "-e", str(bridge_bin), f"-Rvr"
+        "-e", str(bridge_image), f"-Rvr"
     ]
     bridge_proc = subprocess.Popen(bridge_cmd, env=current_env)
     time.sleep(1.0) # Give bridge time to start
@@ -220,7 +225,7 @@ def setup_qemu_base_target(target_chip: str, image_elf: Path, uart_sock: Path) -
         sys.exit(1)
     return qemu_bin, qemu_args
 
-def setup_pci_bridge(qemu_args: list[str], enable_net: bool, run_sniffer: bool) -> tuple[any, any]:
+def setup_pci_bridge(qemu_args: list[str], enable_net: bool, run_sniffer: bool, debug: bool) -> tuple[any, any]:
     """Initialize PCIe co-simulation bridge and packet sniffing."""
     vfio_user_sock = Path("/tmp/vfio-pcie.sock")
 
@@ -228,7 +233,7 @@ def setup_pci_bridge(qemu_args: list[str], enable_net: bool, run_sniffer: bool) 
         print("\033[33m[Monitor] Warning: PCI-Bridge already run.\033[0m", flush=True)
         return None, None
 
-    bridge_proc = start_pcie_cosim_bridge()
+    bridge_proc = start_pcie_cosim_bridge(debug)
     if not bridge_proc:
         return None, None
 
@@ -250,6 +255,8 @@ def setup_pci_bridge(qemu_args: list[str], enable_net: bool, run_sniffer: bool) 
             print("\033[33m[Monitor] Warning: Packet sniffer failed to arm.\033[0m", flush=True)
         else:
             launch_wireshark(log_dir, sniffer_proc)
+    else:
+        sniffer_proc = None
 
     qemu_args.extend(["-device", "pcie-root-port,id=pcie.1"])
     json_config = '{"driver": "vfio-user-pci", "socket": {"type": "unix", "path": "/tmp/vfio-pcie.sock"}, "bus": "pcie.1", "id": "pcie_cosim"}'
@@ -265,12 +272,43 @@ def setup_qemu_env(args, session_id: str, image_elf: Path, uart_sock: Path, enab
         bridge_proc, sniffer_proc = setup_pci_bridge(
             qemu_args=qemu_args,
             enable_net=enable_net,
-            run_sniffer=args.sniffer
+            run_sniffer=args.sniffer,
+            debug=args.bridge
         )
     else:
         bridge_proc, sniffer_proc = None, None
 
     return qemu_bin, qemu_args, bridge_proc, sniffer_proc
+
+def start_gdb(args, gdb_arch, gdb_sock, gdb_target, target_image, session_id):
+    """Start GDB server for debugging."""
+    project_root = Path(__file__).resolve().parent
+    if gdb_sock:
+        gdb_commands = (
+            f"set architecture {gdb_arch}\n"
+            f"target remote {gdb_sock}\n"
+        )
+        gdb_script_path = Path(project_root) / "build" / f".gdb_init_session_{session_id}"
+    else:
+        gdb_commands = (
+            f"set architecture auto\n"
+            f"target remote | gdbserver - {target_image} -Rvr\n"
+        )
+        gdb_script_path = Path(project_root) / "build" / f".gdb_bridge_init_session_{session_id}"
+
+    gdb_script_path.write_text(gdb_commands)
+    gdb_env = os.environ.copy()
+    gdb_env["DEBUGINFOD_URLS"] = ""
+    gdb_cmd = [
+        "xterm", "-hold", "-title", f"Session {session_id} GDB Target {gdb_target}",
+        "-e", "gdb-multiarch", target_image, "-x", str(gdb_script_path)
+    ]
+    gdb_proc = subprocess.Popen(gdb_cmd, env=gdb_env)
+    if gdb_sock:
+        print(f"\033[95m[Monitor] GDB stub listening on UDS {gdb_sock} CPU frozen at entry point.\033[0m")
+    else:
+        print(f"\033[95m[Monitor] GDB stub listening to Bridge process PID {gdb_proc.pid}\033[0m")
+    return gdb_proc
 
 def parse_arguments(arm_chips, riscv_chips, enable_dbg, enable_net):
     parser = argparse.ArgumentParser(description="Simulation Framework Monitor")
@@ -301,6 +339,10 @@ def parse_arguments(arm_chips, riscv_chips, enable_dbg, enable_net):
         parser.add_argument(
             "--debug", action="store_true",
             help="Enable GDB server and stop guest CPU at startup"
+        )
+        parser.add_argument(
+            "--bridge", action="store_true",
+            help="Enable GDB server and stop bridge at startup, requires --chip=x86-virt"
         )
     if enable_net:
         parser.add_argument(
@@ -375,7 +417,7 @@ def main():
     if enable_dbg and args.debug:
         qemu_args.extend(["-gdb", f"unix:{gdb_sock},server=on,wait=off", "-S"])
 
-    gdb_proc, qemu_proc, socat_proc = None, None, None
+    gdb_proc, qemu_proc, socat_proc = [], None, None
 
     try:
         print(f"[Monitor] QEMU initialization: {qemu_bin} {' '.join(qemu_args)}")
@@ -420,23 +462,16 @@ def main():
 
         if enable_dbg and args.debug:
             print("\033[92m[Monitor] Spawning Terminal for Debugging (gdb)...\033[0m")
-            gdb_commands = (
-                f"set architecture {arch}\n"
-                f"target remote {gdb_sock}\n"
-            )
-            gdb_script_path = Path(project_root) / "build" / f".gdb_init_flight_{session_id}"
-            gdb_script_path.write_text(gdb_commands)
-            gdb_env = current_env.copy() if current_env else os.environ.copy()
-            gdb_env["DEBUGINFOD_URLS"] = ""
+            if args.chip == "x86-virt" and args.bridge:
+                bridge_image = Path(__file__).resolve().parent.parent / "pcie_cosim" / "build" / "pcie_sim"
+                if not bridge_image.exists():
+                    print(f"\033[91m[Monitor] Error: PCI-Bridge image {bridge_image} not found.\033[0m")
+                    sys.exit(1)
+                gdb_arch = "auto"
+                gdb_proc.append(start_gdb(args, gdb_arch, None, "Bridge x86-64", bridge_image, session_id))
 
-            target_image = image_elf
-
-            gdb_cmd = [
-                "xterm", "-hold", "-title", f"Session {session_id} GDB Target {arch}/{args.chip}",
-                "-e", "gdb-multiarch", target_image, "-x", str(gdb_script_path)
-            ]
-            gdb_proc = subprocess.Popen(gdb_cmd, env=gdb_env)
-            print(f"\033[95m[Monitor] Debug mode active. GDB stub listening on UDS '{gdb_sock}'. CPU frozen at entry point.\033[0m")
+            gdb_arch = arch
+            gdb_proc.append(start_gdb(args, gdb_arch, gdb_sock, f"{arch}/{args.chip}", image_elf, session_id))
 
         print("\033[94m[Monitor] Press 'Ctrl + ]' to exit.\033[0m")
         old_settings = termios.tcgetattr(sys.stdin.fileno())
@@ -485,9 +520,9 @@ def main():
         process_list = [
             (qemu_proc, "QEMU"),
             (socat_proc, "Socat"),
-            (gdb_proc, "GDB"),
             (bridge_proc, "Bridge")
         ]
+        process_list.extend([(proc, "GDB") for proc in gdb_proc])
 
         for proc, name in process_list:
             if not proc:
@@ -526,14 +561,16 @@ def main():
                 except Exception:
                     pass
 
-        if gdb_proc:
+        if len(gdb_proc) > 0:
             try:
                 gdb_sock.unlink(missing_ok=True)
             except Exception:
                 pass
-            gdb_script = Path.cwd() / "build" / f".gdb_init_flight_{session_id}"
+            gdb_script = Path.cwd() / "build" / f".gdb_init_session_{session_id}"
+            gdb_bridge_script = Path.cwd() / "build" / f".gdb_bridge_init_session_{session_id}"
             try:
                 gdb_script.unlink(missing_ok=True)
+                gdb_bridge_script.unlink(missing_ok=True)
             except Exception:
                 pass
 
