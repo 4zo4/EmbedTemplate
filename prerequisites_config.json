@@ -67,7 +67,7 @@
       "id": "debug",
       "name": "Debug Tools",
       "description": "Cross-architecture debugging utilities",
-      "packages": ["gdb-multiarch"],
+      "packages": ["gdb-multiarch", "gdbserver"],
       "repos": []
     },
     {
