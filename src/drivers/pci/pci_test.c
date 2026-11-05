@@ -17,10 +17,10 @@
 
 #define PCI_VENDOR_ID_VFIO 0x494f
 #define PCI_DEVICE_ID_VFIO 0x0dc8
-#define PCI_COMMAND_INTX_DISABLE 0x400
+#define PCI_COMMAND_INTX_DISABLE 0x400 // IntX Disable bit in PCI command register
 
 uint64_t get_timestamp48(void);
-uint32_t pcie_get_msi_irq_count(uint32_t vector);
+uint32_t pcie_get_int_count(uint32_t vector);
 
 volatile uint32_t *bar0_base_addr;
 
@@ -85,7 +85,7 @@ exit:
     LOG_PCI_INFO("[TEST %d] VFIO Device validation %s", test_idx, pass ? "PASS" : "FAIL");
 }
 
-void test_pci_msi_irq(int test_idx)
+void test_pci_int(int test_idx)
 {
     bool pass = false;
 
@@ -94,22 +94,22 @@ void test_pci_msi_irq(int test_idx)
     if (!dev_info)
         return;
 
-    printf(UI_COLOR_CYAN "[TEST %d]" UI_STYLE_RESET " Initiating MSI validation for PCI device: 0x%04X:0x%04X\r\n", test_idx, PCI_VENDOR_ID_VFIO, PCI_DEVICE_ID_VFIO);
+    printf(UI_COLOR_CYAN "[TEST %d]" UI_STYLE_RESET " Initiating PCI interrupt validation for PCI device: 0x%04X:0x%04X\r\n", test_idx, PCI_VENDOR_ID_VFIO, PCI_DEVICE_ID_VFIO);
 
     void *bar0 = pci_ioremap_bar(dev_info, 0);
     if (!bar0) {
         printf(UI_COLOR_YELLOW "[SYS:PCI]" UI_STYLE_RESET
                                "[WARN] BAR 0 mapping omitted or unconfigured. Exiting\r\n");
     } else {
-        LOG_PCI_INFO("[TEST %d] Starting MSI validation sequence", test_idx);
+        LOG_PCI_INFO("[TEST %d] Starting PCI interrupt validation sequence", test_idx);
 
-        uint32_t baseline = pcie_get_msi_irq_count(0); // MSI vector 0
+        uint32_t baseline = pcie_get_int_count(0); // interrupt vector 0
         LOG_PCI_INFO("Capturing a baseline interrupt count: %u", baseline);
 
         // set write to memory base address
         bar0_base_addr = (volatile uint32_t *)((uintptr_t)bar0 + 0);
 
-        LOG_PCI_INFO("Triggering RTL MSI via BAR0 write 'acdcbabe' to PCIe device");
+        LOG_PCI_INFO("Triggering RTL PCI interrupt via BAR0 write 'acdcbabe' to PCIe device");
 #ifndef ENABLE_RTOS
         *bar0_base_addr = 0xACDCBABE; // trigger irq
         pass = pass;                  // unused
@@ -122,20 +122,20 @@ void test_pci_msi_irq(int test_idx)
         *bar0_base_addr = 0xACDCBABE; // trigger irq
 
         LOG_PCI_INFO("Waiting for interrupt propagation...");
-        uint32_t   msi_vector_bmp = 0;
-        BaseType_t notified = xTaskNotifyWait(0x00000000, 0xFFFFFFFF, &msi_vector_bmp, 40);
-        if ((notified == pdTRUE) && (msi_vector_bmp & BIT(0))) { // check is vector 0
-            uint32_t post = pcie_get_msi_irq_count(0);           // MSI vector 0
-            LOG_PCI_INFO("MSI verification done. Interrupt count baseline: %u post: %u", baseline, post);
+        uint32_t   int_vector_bmp = 0;
+        BaseType_t notified = xTaskNotifyWait(0x00000000, 0xFFFFFFFF, &int_vector_bmp, 40);
+        if ((notified == pdTRUE) && (int_vector_bmp & BIT(0))) { // check is vector 0
+            uint32_t post = pcie_get_int_count(0);               // interrupt vector 0
+            LOG_PCI_INFO("PCI interrupt verification done. Interrupt count baseline: %u post: %u", baseline, post);
             if (post == baseline + 1) {
                 pass = true;
-                LOG_PCI_INFO("MSI interrupt captured by the RTOS");
+                LOG_PCI_INFO("PCI interrupt captured by the RTOS");
             }
         } else if (notified == pdFALSE) {
-            LOG_PCI_ERROR("Timeout waiting for MSI interrupt");
+            LOG_PCI_ERROR("Timeout waiting for PCI interrupt");
         }
     }
-    LOG_PCI_INFO("[TEST %d] VFIO Device MSI validation %s", test_idx, pass ? "PASS" : "FAIL");
+    LOG_PCI_INFO("[TEST %d] VFIO Device PCI interrupt validation %s", test_idx, pass ? "PASS" : "FAIL");
 #endif
 }
 
@@ -146,7 +146,7 @@ void test_pci(void)
     uint64_t value = get_timestamp48();
     test_pci_validate_vfio_device(1, 0x20, (uint32_t)(value & 0xFFFFFFFF));
 #ifdef ENABLE_RTOS
-    test_pci_msi_irq(2);
+    test_pci_int(2);
     log_set_level(DOMAIN_SYS, ENTITY_PCI, LOG_LEVEL_INFO);
 #endif
 }
@@ -160,12 +160,12 @@ void pci_test_start(void)
 }
 
 // used in event loop
-void test_pci_post_msi_irq(int test_idx)
+void test_pci_post_int(int test_idx)
 {
-    LOG_PCI_INFO("MSI interrupt captured");
-    uint32_t post = pcie_get_msi_irq_count(0); // MSI vector 0
-    LOG_PCI_INFO("MSI verification done. Interrupt count post: %u", post);
-    LOG_PCI_INFO("[TEST %d] VFIO Device MSI validation PASS", test_idx);
+    LOG_PCI_INFO("PCI interrupt captured");
+    uint32_t post = pcie_get_int_count(0); // interrupt vector 0
+    LOG_PCI_INFO("PCI interrupt verification done. Interrupt count post: %u", post);
+    LOG_PCI_INFO("[TEST %d] VFIO Device PCI interrupt validation PASS", test_idx);
     log_set_level(DOMAIN_SYS, ENTITY_PCI, LOG_LEVEL_INFO);
 }
 #endif

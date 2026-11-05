@@ -26,8 +26,8 @@ int  cli_init(void **cli_ctx);
 bool cli_run(void *cli_ctx);
 void cli_exit(void *cli_ctx);
 void test_pci(void);
-void test_pci_msi_irq(int test_idx);
-void test_pci_post_msi_irq(int test_idx);
+void test_pci_int(int test_idx);
+void test_pci_post_int(int test_idx);
 
 uint64_t get_timestamp48(void);
 
@@ -72,8 +72,8 @@ int main(void)
             if (event & EVT_PCI_TEST) { // is PCI Test event
                 test_pci();             // start PCI test (1)
             }
-            if (event & EVT_MSI_MASK) {   // is PCI MSI event
-                test_pci_post_msi_irq(2); // MSI test epilogue (2.2)
+            if (event & EVT_MSI_MASK) { // is PCI interrupt event
+                test_pci_post_int(2);   // PCI interrupt test epilogue (2.2)
             }
 #endif
             if (event & EVT_SYS_TICK) { // is SysTick event
@@ -85,7 +85,7 @@ int main(void)
             keep_running = cli_run(cli_ctx);
 #ifdef ENABLE_PCI
             if (event & EVT_PCI_TEST) {
-                test_pci_msi_irq(2); // start PCI MSI test (2.1) after flashing PCI Test logs
+                test_pci_int(2); // start PCI interrupt test (2.1) after flashing PCI Test logs
             }
 #endif
         }

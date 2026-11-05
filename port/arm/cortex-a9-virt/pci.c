@@ -2,7 +2,7 @@
  * @file pci.c
  * @brief PCI (Peripheral Component Interconnect)-specific implementations for QEMU Cortex-A15 Virt.
  * This file contains the implementations of the PCI-specific functions for the QEMU Cortex-A15 Virt,
- * including PCI enumeration and MSI configuration.
+ * including PCI enumeration and PCI interrupt configuration.
  */
 #include <stdint.h>
 #include <stdio.h>
@@ -26,35 +26,35 @@
 #define PCI_DEVICE_ID_VFIO 0x0dc8
 #define GICV2M_SPI_BASE 48 // Shared Peripheral Interrupt (SPI) IRQ ID base for QEMU's GICv2m MSI frame
 
-#define MAX_MSI_SEQUENCE MAX_SEQUENCE // Maximum MSI sequence for trampoline generation
-#ifndef MAX_PCI_MSI
-#define MAX_PCI_MSI 2 // Maximum number of PCI MSI vectors supported for the system
+#define MAX_INT_SEQUENCE MAX_SEQUENCE // Maximum PCI interrupt sequence for trampoline generation
+#ifndef MAX_PCI_INT
+#define MAX_PCI_INT 2 // Maximum number of PCI interrupt vectors supported for the system
 #endif
-#if MAX_PCI_MSI > MAX_MSI_SEQUENCE
-#error "MAX_PCI_MSI cannot exceed MAX_MSI_SEQUENCE"
+#if MAX_PCI_INT > MAX_INT_SEQUENCE
+#error "MAX_PCI_INT cannot exceed MAX_INT_SEQUENCE"
 #endif
 
 #ifndef ENABLE_PCI
-#undef MAX_PCI_MSI
-#define MAX_PCI_MSI 0
+#undef MAX_PCI_INT
+#define MAX_PCI_INT 0
 #endif
 
-void pcie_msi_vector_handler(uint32_t index); // Forward declaration of the MSI vector handler
+void pcie_int_vector_handler(uint32_t index); // Forward declaration of the PCI interrupt vector handler
 
-#if (MAX_PCI_MSI > 0)
+#if (MAX_PCI_INT > 0)
 
-typedef struct pcie_msi_stats_s {
-    uint32_t count[MAX_PCI_MSI];
-} pcie_msi_stats_t;
+typedef struct pcie_int_stats_s {
+    uint32_t count[MAX_PCI_INT];
+} pcie_int_stats_t;
 
-#define ENABLE_MSI
+#define ENABLE_PCI_INT // Enable PCI interrupt handling
 /*
-   Boilerplate X-Macros to generate trampolines for each MSI vector
-   Example for MAX_PCI_MSI = 2:
-   static void pcie_msi_trampoline_0(void) { pcie_msi_vector_handler(0); }
-   static void pcie_msi_trampoline_1(void) { pcie_msi_vector_handler(1); }
+   Boilerplate X-Macros to generate trampolines for each PCI interrupt vector
+   Example for MAX_PCI_INT = 2:
+   static void pcie_int_trampoline_0(void) { pcie_int_vector_handler(0); }
+   static void pcie_int_trampoline_1(void) { pcie_int_vector_handler(1); }
    static const irq_handler_t pci_trampoline_table[] = {
-       pcie_msi_trampoline_0, pcie_msi_trampoline_1,
+       pcie_int_trampoline_0, pcie_int_trampoline_1,
    };
 */
 #define CONCAT(a, b) a##_##b
@@ -63,33 +63,34 @@ typedef struct pcie_msi_stats_s {
 #define CREATE_TRAMPOLINE_FUNC(prefix, index) \
     static void ADD_NAME(prefix, index)(void) \
     { \
-        pcie_msi_vector_handler(index); \
+        pcie_int_vector_handler(index); \
     }
-CREATE_LIST(CREATE_TRAMPOLINE_FUNC, pcie_msi_trampoline, MAX_PCI_MSI)
+CREATE_LIST(CREATE_TRAMPOLINE_FUNC, pcie_int_trampoline, MAX_PCI_INT)
 #undef CREATE_TRAMPOLINE_FUNC
 // Rollup the specified number of trampoline functions into a trampoline table
 #define ADD_TRAMPOLINES(prefix, index) ADD_NAME(prefix, index),
 static const irq_handler_t pci_trampoline_table[] = {
-    CREATE_LIST(ADD_TRAMPOLINES, pcie_msi_trampoline, MAX_PCI_MSI)
+    CREATE_LIST(ADD_TRAMPOLINES, pcie_int_trampoline, MAX_PCI_INT)
 };
 #undef ADD_TRAMPOLINES
-#endif // MAX_PCI_MSI > 0
+#endif // MAX_PCI_INT > 0
 
-#ifdef ENABLE_MSI
-static pcie_msi_stats_t pcie_msi_stats;
+#ifdef ENABLE_PCI_INT
+static pcie_int_stats_t pcie_int_stats;
 
-uint32_t pcie_get_msi_irq_count(uint32_t vector)
+uint32_t pcie_get_int_count(uint32_t vector)
 {
-    return pcie_msi_stats.count[vector];
+    return pcie_int_stats.count[vector];
 }
 
 #ifdef ENABLE_RTOS
 extern TaskHandle_t xPciHandle;
-void                pcie_msi_vector_handler(uint32_t index)
-{
-    LOG_PCI_DEBUG("PCI MSI interrupt %u received", GICV2M_SPI_BASE + index);
 
-    pcie_msi_stats.count[index]++;
+void pcie_int_vector_handler(uint32_t index)
+{
+    LOG_PCI_DEBUG("PCI interrupt %u received", GICV2M_SPI_BASE + index);
+
+    pcie_int_stats.count[index]++;
 
     if (xPciHandle != nullptr) {
         BaseType_t xHigherPriorityTaskWoken = pdFALSE;
@@ -100,43 +101,43 @@ void                pcie_msi_vector_handler(uint32_t index)
     }
 }
 #else // !ENABLE_RTOS
-void pcie_msi_vector_handler(uint32_t index)
+void pcie_int_vector_handler(uint32_t index)
 {
-    LOG_PCI_DEBUG("PCI MSI interrupt %u received, event 0x%x set", GICV2M_SPI_BASE + index, EVT_MSI_IDX(index));
+    LOG_PCI_DEBUG("PCI interrupt %u received, event 0x%x set", GICV2M_SPI_BASE + index, EVT_MSI_IDX(index));
 
-    pcie_msi_stats.count[index]++;
+    pcie_int_stats.count[index]++;
 
     event_notify |= EVT_MSI_IDX(index);
 }
 #endif
-#endif // ENABLE_MSI
+#endif // ENABLE_PCI_INT
 
-int pcie_register_msi_vector(pci_device_info_t *dev_info, uint32_t *vector_idx)
+static int pcie_register_int_vector(pci_device_info_t *dev_info, uint32_t *vector_idx)
 {
-#ifdef ENABLE_MSI
-    static uint32_t vector_count = 0;
-
+#ifdef ENABLE_PCI_INT
     if (dev_info->vendor_id != PCI_VENDOR_ID_VFIO &&
         dev_info->device_id != PCI_DEVICE_ID_VFIO)
         return -1;
 
-    if (vector_count >= MAX_PCI_MSI)
+    if (dev_info->vector_count >= MAX_PCI_INT)
         return -1; // No more vectors available
 
-    uint32_t vector_id = GICV2M_SPI_BASE + vector_count;
+    uint32_t vector_id = GICV2M_SPI_BASE + dev_info->vector_count;
     uint32_t irq_id = vector_id - GICV2M_SPI_BASE;
 
-    gic_register_interrupt(irq_id, pci_trampoline_table[vector_count]);
+    gic_register_interrupt(irq_id, pci_trampoline_table[dev_info->vector_count]);
     gic_enable_interrupt(irq_id, 0x20);
     *vector_idx = vector_id;
 
-    vector_count++;
+    dev_info->vector_count++;
 
-    LOG_PCI_INFO("Allocated MSI vector %u (IRQ ID: %u) for PCIe device: %04x:%04x (%02x:%02x.%x)", vector_id, irq_id, dev_info->vendor_id, dev_info->device_id, dev_info->bus, dev_info->dev, dev_info->func);
+    LOG_PCI_INFO("Allocated %s vector %u (IRQ ID: %u) for PCIe device: %04x:%04x (%02x:%02x.%x)", int_mode_to_string(dev_info->int_mode), vector_id, irq_id, dev_info->vendor_id, dev_info->device_id, dev_info->bus, dev_info->dev, dev_info->func);
     return 0;
-#else // !ENABLE_MSI
+#else // !ENABLE_PCI_INT
     (void)vector_idx;
-    LOG_PCI_WARNING("MSI not enabled. Cannot allocate MSI vector for PCIe device: %04x:%04x (%02x:%02x.%x)", dev_info->vendor_id, dev_info->device_id, dev_info->bus, dev_info->dev, dev_info->func);
+    if (dev_info->int_mode != PCI_INT_MODE_NONE) {
+        LOG_PCI_WARNING("PCI interrupt handling not enabled. Cannot allocate %s interrupt vector for PCIe device: %04x:%04x (%02x:%02x.%x)", int_mode_to_string(dev_info->int_mode), dev_info->vendor_id, dev_info->device_id, dev_info->bus, dev_info->dev, dev_info->func);
+    }
     return -1;
 #endif
 }
@@ -146,6 +147,7 @@ void init_pci(void)
 #ifdef ENABLE_PCI
     if (initialized & PCI_INITIALIZED)
         return;
+    pci_register_int_vector = pcie_register_int_vector;
     pci_database_t *pci_db = get_pci_database();
     log_set_level(DOMAIN_SYS, ENTITY_PCI, LOG_LEVEL_INFO);
 

@@ -1,7 +1,7 @@
 
 #pragma once
 
-#define MAX_PCI_DEVICES 32
+#define MAX_PCI_DEVICES 24
 #define MAX_PCI_BRIDGES 2
 #define MAX_FUNCTIONS 8
 #define MAX_BARS 6
@@ -30,6 +30,13 @@ typedef enum {
     PCI_HEADER_TYPE_BRIDGE = 1
 } pci_header_t;
 
+typedef enum {
+    PCI_INT_MODE_NONE = 0,
+    PCI_INT_MODE_INTX,
+    PCI_INT_MODE_MSI,
+    PCI_INT_MODE_MSIX
+} pci_int_mode_t;
+
 typedef struct {
     uint8_t  bus;
     uint8_t  dev;
@@ -37,7 +44,9 @@ typedef struct {
     uint8_t  header_type;
     uint16_t vendor_id;
     uint16_t device_id;
-    uint32_t bar_size[MAX_BARS]; /* Endpoints have up to 6 BARs; Bridges have 2 */
+    uint8_t  int_mode;
+    uint8_t  vector_count;       // Number of allocated interrupt vectors for this device
+    uint32_t bar_size[MAX_BARS]; // Endpoints have up to 6 BARs; Bridges have 2
     uint32_t bar_address[MAX_BARS];
 } pci_device_info_t;
 
@@ -48,13 +57,12 @@ typedef struct {
     uint8_t  header_type;
     uint16_t vendor_id;
     uint16_t device_id;
-
-    uint8_t primary_bus;     // Bus number upstream of the bridge (closer to CPU)
-    uint8_t secondary_bus;   // Bus number directly managed downstream by this bridge
-    uint8_t subordinate_bus; // Highest bus number reachable behind this bridge
-
-    uint32_t mem_base;  // Starting physical address of mapped MMIO window
-    uint32_t mem_limit; // Ending physical address of mapped MMIO window
+    uint8_t  primary_bus;     // Bus number upstream of the bridge (closer to CPU)
+    uint8_t  secondary_bus;   // Bus number directly managed downstream by this bridge
+    uint8_t  subordinate_bus; // Highest bus number reachable behind this bridge
+    uint32_t mem_base;        // Starting physical address of mapped MMIO window
+    uint32_t mem_limit;       // Ending physical address of mapped MMIO window
+    uint32_t mem_free;        // Next available physical address for MMIO allocation
 } pci_bridge_info_t;
 
 typedef struct {
@@ -89,3 +97,7 @@ void pci_set_master(pci_device_info_t *dev);
 
 void pci_config_device_resources(pci_device_info_t *dev);
 void pci_dump_device_database(void);
+
+const char *int_mode_to_string(pci_int_mode_t int_mode);
+
+extern int (*pci_register_int_vector)(pci_device_info_t *dev_info, uint32_t *vector_idx);

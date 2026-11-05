@@ -21,6 +21,7 @@
 #define PCI_SCANNED BIT(15)
 #define PCI_MSI_BASE_ADDRESS pcie_msi_base_addr
 #define PCI_MSI_CAP_ID 0x05
+#define PCI_MSIX_CAP_ID 0x11
 #define ECAM_ADDR16(offset) (*(volatile uint16_t *)(PCI_ECAM_BASE + (offset)))
 #define ECAM_ADDR32(offset) (*(volatile uint32_t *)(PCI_ECAM_BASE + (offset)))
 
@@ -234,7 +235,8 @@ static void do_pci_scan(uint8_t bus)
 
                 uint32_t mem_reg = pcie_read_config_dword(bus, dev, func, 0x20);
                 pci_bridge->mem_base = (mem_reg & 0xFFF0) << 16;
-                pci_bridge->mem_limit = (mem_reg & 0xFFF00000);
+                pci_bridge->mem_limit = (mem_reg & 0xFFF00000) | 0x000FFFFF;
+                pci_bridge->mem_free = pci_bridge->mem_base;
                 pci_db.bridge_count++;
                 // Recursively traverse downstream
                 if (secondary_bus > bus) {
@@ -256,7 +258,15 @@ void pci_scan(uint8_t bus)
 void pci_alloc(void)
 {
     pci_device_info_t *pci_devices = pci_db.device_info;
+    pci_bridge_info_t *pci_bridges = pci_db.bridge_info;
 
+    // Enable MMIO windows for bridges
+    for (uint32_t i = 0; i < pci_db.bridge_count; i++) {
+        pci_bridge_info_t *bridge = &pci_bridges[i];
+        uint32_t           cmd = pcie_read_config_dword(bridge->bus, bridge->dev, bridge->func, PCI_CONFIG_COMMAND);
+        pcie_write_config_dword(bridge->bus, bridge->dev, bridge->func, PCI_CONFIG_COMMAND, cmd | 0x06);
+    }
+    // Allocate BARs for endpoint devices
     for (uint32_t i = 0; i < pci_db.device_count; i++) {
         pci_device_info_t *dev = &pci_devices[i];
 
@@ -264,49 +274,63 @@ void pci_alloc(void)
             continue;
 
         if (dev->header_type == PCI_HEADER_TYPE_ENDPOINT) {
+            pci_bridge_info_t *parent_bridge = nullptr;
+            if (dev->bus > 0) {
+                for (uint16_t bdx = 0; bdx < pci_db.bridge_count; bdx++) {
+                    if (pci_bridges[bdx].secondary_bus == dev->bus) {
+                        parent_bridge = &pci_bridges[bdx];
+                        break;
+                    }
+                }
+            }
+
             for (int bar_idx = 0; bar_idx < MAX_BARS; bar_idx++) {
                 if (dev->bar_size[bar_idx] == 0)
                     continue;
 
                 uint32_t alignment = dev->bar_size[bar_idx];
-                free_mmio = (free_mmio + (alignment - 1)) & ~(alignment - 1);
+                uint32_t mem_addr = 0;
+                if (parent_bridge != nullptr) {
+                    parent_bridge->mem_free = (parent_bridge->mem_free + (alignment - 1)) & ~(alignment - 1);
+                    mem_addr = parent_bridge->mem_free;
+                    parent_bridge->mem_free += dev->bar_size[bar_idx];
+                } else {
+                    free_mmio = (free_mmio + (alignment - 1)) & ~(alignment - 1);
+                    mem_addr = free_mmio;
+                    free_mmio += dev->bar_size[bar_idx];
+                }
 
                 uint32_t bar_offset = PCI_CONFIG_BAR0 + (bar_idx * 4);
-                pcie_write_config_dword(dev->bus, dev->dev, dev->func, bar_offset, free_mmio);
-                dev->bar_address[bar_idx] = free_mmio;
+                pcie_write_config_dword(dev->bus, dev->dev, dev->func, bar_offset, mem_addr);
+                dev->bar_address[bar_idx] = mem_addr;
 
-                printf("\r[PCI Alloc] PCI Device %04x:%04x BAR%d at 0x%08lx Size: %lu KB\n", dev->vendor_id, dev->device_id, bar_idx, free_mmio, dev->bar_size[bar_idx] >> 10);
+                printf("\r[PCI Alloc] PCI Device %04x:%04x BAR%d at 0x%08lx Size: %lu KB\n", dev->vendor_id, dev->device_id, bar_idx, mem_addr, dev->bar_size[bar_idx] >> 10);
                 free_mmio += dev->bar_size[bar_idx]; // advance free MMIO pointer for next allocation
             }
 
-            pci_alloc_irq_vectors(dev);
             uint32_t cmd = pcie_read_config_dword(dev->bus, dev->dev, dev->func, PCI_CONFIG_COMMAND);
             pcie_write_config_dword(dev->bus, dev->dev, dev->func, PCI_CONFIG_COMMAND, cmd | 0x06);
-        } else if (dev->header_type == PCI_HEADER_TYPE_BRIDGE) {
-            uint32_t bridge_mem_base = free_mmio & 0xFFF00000;
-            pcie_write_config_dword(dev->bus, dev->dev, dev->func, 0x20, (bridge_mem_base >> 16));
-            uint32_t cmd = pcie_read_config_dword(dev->bus, dev->dev, dev->func, PCI_CONFIG_COMMAND);
-            pcie_write_config_dword(dev->bus, dev->dev, dev->func, PCI_CONFIG_COMMAND, cmd | 0x06);
+            pci_alloc_irq_vectors(dev); // Allocate interrupt vectors for the device
         }
     }
 }
 
-static uint8_t pcie_find_capability(uint8_t bus, uint8_t dev, uint8_t func, uint8_t match_cap_id)
+static uint8_t pci_find_capability(pci_device_info_t *pci_dev, uint8_t match_cap_id)
 {
-    uint32_t status_cmd_reg = pcie_read_config_dword(bus, dev, func, 0x04);
+    uint32_t status_cmd_reg = pci_read_config_dword(pci_dev, 0x04);
     uint16_t status_reg = (uint16_t)(status_cmd_reg >> 16);
 
     if (!(status_reg & BIT(4)))
         return 0;
 
-    uint32_t cap_ptr = pcie_read_config_dword(bus, dev, func, 0x34) & 0xFF;
+    uint32_t cap_ptr = pci_read_config_dword(pci_dev, 0x34) & 0xFF;
     int      timeout = 16;
 
     while (cap_ptr != 0 && --timeout > 0) {
         uint32_t aligned_ptr = cap_ptr & 0xFC;
         uint32_t shift_bits = (cap_ptr & 0x03) * 8; // Calculate the byte-shift offset (0, 8, 16, or 24 bits)
 
-        uint32_t raw_reg = pcie_read_config_dword(bus, dev, func, aligned_ptr);
+        uint32_t raw_reg = pci_read_config_dword(pci_dev, aligned_ptr);
         uint32_t cap_hdr = raw_reg >> shift_bits;
         uint8_t  cap_id = cap_hdr & 0xFF;
         if (cap_id == match_cap_id)
@@ -318,29 +342,164 @@ static uint8_t pcie_find_capability(uint8_t bus, uint8_t dev, uint8_t func, uint
     return 0; // Capability not found
 }
 
-// Forward declaration of the platform-specific MSI vector registration function
-int pcie_register_msi_vector(pci_device_info_t *dev_info, uint32_t *vector_idx);
+int pci_register_int_vector_null(pci_device_info_t *dev_info, uint32_t *vector_idx)
+{
+    (void)dev_info;
+    (void)vector_idx;
+    return -1; // No interrupt vectors available for this platform
+}
+
+/*
+ * Platform-specific interrupt vector registration function pointer
+ * This function pointer can be set to the appropriate platform-specific implementation during initialization.
+ * If not set, it defaults to pci_register_int_vector_null, which returns no vectors available.
+ */
+int (*pci_register_int_vector)(pci_device_info_t *dev_info, uint32_t *vector_idx) = pci_register_int_vector_null;
+
+void setup_msi_interrupts(pci_device_info_t *dev_info, uint8_t msi_cap_off)
+{
+    uint32_t vector_idx = 0; // set placeholder irq id
+    if (pci_register_int_vector(dev_info, &vector_idx) != 0)
+        return;
+
+    pci_write_config_dword(dev_info, msi_cap_off + 0x04, PCI_MSI_BASE_ADDRESS);
+    uint16_t msg_ctrl = pci_read_config_word(dev_info, msi_cap_off + 2);
+    uint8_t  mmc_power = (msg_ctrl >> 1) & 0x07;
+    uint16_t max_vectors = (1U << mmc_power);
+    bool     is_64bit = (msg_ctrl & BIT(7)) != 0;
+
+    uint32_t base_vector_idx = vector_idx;
+    uint32_t vector_count = 1;
+
+    for (; vector_count < max_vectors; vector_count++) {
+        if (pci_register_int_vector(dev_info, &vector_idx) != 0)
+            break; // No more vectors available
+        if (vector_idx != base_vector_idx + vector_count) {
+            printf("\r[PCI Error] Non-contiguous MSI vector %lu for device %02x:%02x.%x\n", vector_idx, dev_info->bus, dev_info->dev, dev_info->func);
+            break;
+        }
+    }
+
+    uint8_t mme_power = 0;
+    while ((1U << (mme_power + 1)) <= vector_count) {
+        mme_power++;
+    }
+    vector_count = 1U << mme_power; // Adjust vector count to the nearest power of two
+    uint16_t irq_id = (base_vector_idx & 0xFFFFU);
+    if (is_64bit) {
+        pci_write_config_word(dev_info, msi_cap_off + 0x0C, irq_id);
+        pci_write_config_dword(dev_info, msi_cap_off + 0x08, 0x00000000);
+    } else {
+        pci_write_config_word(dev_info, msi_cap_off + 0x08, irq_id);
+    }
+
+    msg_ctrl &= ~(0x07 << 4);
+    msg_ctrl |= (mme_power & 0x07) << 4;
+    msg_ctrl |= BIT(0); // set the MSI Enable flag inside the Control WORD
+    pci_write_config_word(dev_info, msi_cap_off + 2, msg_ctrl);
+
+    if (vector_count > 1) {
+        printf("\r[PCI Irq Alloc] PCI Device %02x:%02x.%x MSI Capability Activated on Vectors %lu - %lu\n", dev_info->bus, dev_info->dev, dev_info->func, base_vector_idx, base_vector_idx + vector_count - 1);
+    } else {
+        printf("\r[PCI Irq Alloc] PCI Device %02x:%02x.%x MSI Capability Activated on Vector %lu\n", dev_info->bus, dev_info->dev, dev_info->func, base_vector_idx);
+    }
+}
+
+typedef struct {
+    uint32_t msg_addr_lo;
+    uint32_t msg_addr_hi;
+    uint32_t msg_data;
+    uint32_t vector_ctrl;
+} __attribute__((packed)) msix_entry_t;
+
+void setup_msix_interrupts(pci_device_info_t *dev_info, uint8_t msix_cap_off)
+{
+    uint32_t vector_idx = 0; // set placeholder irq id
+    if (pci_register_int_vector(dev_info, &vector_idx) != 0)
+        return;
+
+    uint16_t msg_ctrl = pci_read_config_word(dev_info, msix_cap_off + 2);
+    uint16_t tbl_size = (msg_ctrl & 0x07FF) + 1; // Table Size is 11 bits, zero-based
+    uint32_t table_reg = pci_read_config_dword(dev_info, msix_cap_off + 0x04);
+    uint32_t table_bir = table_reg & 0x07;       // Lower 3 bits flag target BAR index
+    uint32_t table_off = table_reg & 0xFFFFFFF8; // Upper 29 bits dinternal offset
+
+    uint64_t bar_base_addr = dev_info->bar_address[table_bir];
+    if (bar_base_addr == 0) {
+        printf("\r[PCI Error] MSI-X BAR%lu not mapped/allocated!\n", table_bir);
+        return;
+    }
+
+    uint32_t cmd = pci_read_config_dword(dev_info, PCI_CONFIG_COMMAND);
+    pci_write_config_dword(dev_info, PCI_CONFIG_COMMAND, cmd | 0x02); // Enable Memory Space Decoding
+    volatile msix_entry_t *msix_table = (volatile msix_entry_t *)(uintptr_t)(bar_base_addr + table_off);
+
+    for (uint16_t tbl_idx = 0; tbl_idx < tbl_size; tbl_idx++) {
+        msix_table[tbl_idx].msg_addr_lo = (uint32_t)PCI_MSI_BASE_ADDRESS;
+        msix_table[tbl_idx].msg_addr_hi = 0x00000000;
+        msix_table[tbl_idx].msg_data = (vector_idx & 0xFFFFU);
+        msix_table[tbl_idx].vector_ctrl = 0x00000000; // Unmask Vector
+
+        if (pci_register_int_vector(dev_info, &vector_idx) != 0) {
+            break; // No more vectors available
+        }
+    }
+
+    msg_ctrl |= BIT(15); // set the MSI-X Enable flag inside the Control WORD
+    pci_write_config_word(dev_info, msix_cap_off + 2, msg_ctrl);
+
+    printf("\r[PCI Irq Alloc] PCI Device %02x:%02x.%x MSI-X Capability Activated on Vector %lu\n", dev_info->bus, dev_info->dev, dev_info->func, vector_idx);
+}
+
+void setup_legacy_intx(pci_device_info_t *dev_info)
+{
+    uint32_t vector_idx = 0; // set placeholder irq id
+    if (pci_register_int_vector(dev_info, &vector_idx) != 0)
+        return;
+
+    uint32_t int_reg = pci_read_config_dword(dev_info, 0x3C);
+    uint8_t  int_pin = (uint8_t)((int_reg >> 8) & 0xFF);
+    if (int_pin == 0)
+        return; // No legacy INTx pin assigned
+
+    int_reg = (int_reg & 0xFFFFFF00) | (vector_idx & 0xFF);
+    pci_write_config_dword(dev_info, 0x3C, int_reg);
+
+    printf("\r[PCI Irq Alloc] PCI Device %02x:%02x.%x Legacy INTx Activated on Vector %lu\n", dev_info->bus, dev_info->dev, dev_info->func, vector_idx);
+}
 
 void pci_alloc_irq_vectors(pci_device_info_t *dev_info)
 {
-    uint8_t msi_cap_offset = pcie_find_capability(dev_info->bus, dev_info->dev, dev_info->func, PCI_MSI_CAP_ID);
-    if (!msi_cap_offset)
+    dev_info->int_mode = PCI_INT_MODE_NONE;
+    dev_info->vector_count = 0;
+
+    uint8_t msix_off = pci_find_capability(dev_info, PCI_MSIX_CAP_ID);
+    uint8_t msi_off = pci_find_capability(dev_info, PCI_MSI_CAP_ID);
+
+    uint32_t int_reg = pci_read_config_dword(dev_info, 0x3C);
+    uint8_t  int_pin = (uint8_t)((int_reg >> 8) & 0xFF);
+
+    if (int_pin != 0)
+        dev_info->int_mode = PCI_INT_MODE_INTX;
+    if (msi_off)
+        dev_info->int_mode = PCI_INT_MODE_MSI;
+
+    if (msix_off)
+        dev_info->int_mode = PCI_INT_MODE_MSIX;
+
+    if (msix_off) {
+        setup_msix_interrupts(dev_info, msix_off);
         return;
+    }
 
-    uint32_t vector_idx = 0; // set placeholder irq id
-    if (pcie_register_msi_vector(dev_info, &vector_idx) != 0)
+    if (msi_off) {
+        setup_msi_interrupts(dev_info, msi_off);
         return;
+    }
 
-    pci_write_config_dword(dev_info, msi_cap_offset + 0x04, PCI_MSI_BASE_ADDRESS);
-    pci_write_config_dword(dev_info, msi_cap_offset + 0x08, 0x00000000);
-
-    uint16_t irq_id = (vector_idx & 0xFFFFU);
-    pci_write_config_word(dev_info, msi_cap_offset + 0x0C, irq_id);
-    uint16_t msg_ctrl = pci_read_config_word(dev_info, msi_cap_offset + 2);
-    msg_ctrl |= BIT(0); // set the MSI Enable flag inside the Control WORD
-    pci_write_config_word(dev_info, msi_cap_offset + 2, msg_ctrl);
-
-    printf("\r[PCI Irq Alloc] PCI Device %02x:%02x.%x MSI Capability Activated on Vector %lu\n", dev_info->bus, dev_info->dev, dev_info->func, vector_idx);
+    if (int_pin != 0) {
+        setup_legacy_intx(dev_info);
+    }
 }
 
 uint16_t pci_read_config_word(pci_device_info_t *pci_dev, uint16_t addr)

@@ -183,6 +183,26 @@ void pci_config_device_resources(pci_device_info_t *dev)
             dev->vendor_id, dev->device_id, dev->bus, dev->dev, dev->func);
     // clang-format on
 
+    uint32_t old_cmd = pci_read_config_dword(dev, PCI_CONFIG_COMMAND);
+    pci_write_config_dword(dev, PCI_CONFIG_COMMAND, old_cmd & ~0x3);
+
+    for (int bar_idx = 0; bar_idx < MAX_BARS; bar_idx++) {
+        if (dev->bar_size[bar_idx] == 0)
+            continue;
+
+        uint8_t  bar_offset = PCI_CONFIG_BAR0 + (bar_idx * 4);
+        uint32_t value = (uint32_t)dev->bar_address[bar_idx];
+
+        if (log_level >= LOG_LEVEL_DEBUG) {
+            // clang-format off
+            printf("Writing Base Address 0x%08lX to BAR%d (Offset 0x%02X)\r\n",
+                    value, bar_idx, bar_offset);
+            // clang-format on
+        }
+
+        pci_write_config_dword(dev, bar_offset, value);
+    }
+
     if (dev->bus > 0) {
         pci_database_t    *pci_db = get_pci_database();
         pci_bridge_info_t *parent_bridge = nullptr;
@@ -237,8 +257,8 @@ void pci_config_device_resources(pci_device_info_t *dev)
 
                 // clang-format off
                 printf("Setting upstream PCI Bridge (%02X:%02X.%X) MMIO Window: 0x%08lX - 0x%08lX Size: %lu KB\r\n",
-                        parent_bridge->bus, parent_bridge->dev, parent_bridge->func, (unsigned long long)phy_base,
-                        (unsigned long long)phy_limit, (unsigned long long)size / 1024);
+                        parent_bridge->bus, parent_bridge->dev, parent_bridge->func,
+                        phy_base, phy_limit, (uint32_t)(size / 1024));
             } else {
                 pcib_write_config_dword(parent_bridge, PCI_BRIDGE_MEM_BASE, 0x0000FFFF);
                 printf("Setting upstream PCI Bridge (%02X:%02X.%X) memory window disabled\r\n",
@@ -252,27 +272,22 @@ void pci_config_device_resources(pci_device_info_t *dev)
             // clang-format on
         }
     }
-
-    uint32_t old_cmd = pci_read_config_dword(dev, PCI_CONFIG_COMMAND);
-    pci_write_config_dword(dev, PCI_CONFIG_COMMAND, old_cmd & ~0x3);
-
-    for (int bar_idx = 0; bar_idx < MAX_BARS; bar_idx++) {
-        if (dev->bar_size[bar_idx] == 0)
-            continue;
-
-        uint8_t  bar_offset = PCI_CONFIG_BAR0 + (bar_idx * 4);
-        uint32_t value = (uint32_t)dev->bar_address[bar_idx];
-
-        if (log_level >= LOG_LEVEL_DEBUG) {
-            // clang-format off
-            printf("Writing Base Address 0x%08lX to BAR%d (Offset 0x%02X)\r\n",
-                    (unsigned long long)value, bar_idx, bar_offset);
-            // clang-format on
-        }
-
-        pci_write_config_dword(dev, bar_offset, value);
-    }
-
     pci_enable_device(dev);
     pci_set_master(dev);
+}
+
+const char *int_mode_to_string(pci_int_mode_t int_mode)
+{
+    switch (int_mode) {
+    case PCI_INT_MODE_NONE:
+        return "NONE";
+    case PCI_INT_MODE_INTX:
+        return "INTx";
+    case PCI_INT_MODE_MSI:
+        return "MSI";
+    case PCI_INT_MODE_MSIX:
+        return "MSI-X";
+    default:
+        return "Unknown";
+    }
 }
