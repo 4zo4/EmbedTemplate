@@ -29,12 +29,23 @@ static_assert(sizeof(trigger_irq_pkt_t) == 8, "trigger_irq_pkt_t struct size mis
 #define PCI_COMMAND_INTX_DISABLE 0x400 // IntX Disable bit in PCI command register
 #define TRIGGER_IRQ_MAGIC 0xACDCBABE
 
+// prototypes without include file
 uint64_t get_timestamp64(void);
 uint32_t pcie_get_int_count(uint32_t vector);
 
-volatile uint32_t *bar0_base_addr = nullptr; // Base address of BAR0 for PCIe device
-static uint32_t    baseline = 0;             // baseline interrupt count for comparison
-static bool        start_next_test = true;
+// -- Globals --
+
+static uint32_t baseline = 0;           // Baseline interrupt count for comparison
+static bool     start_next_test = true; // Flag checked at the start of the next test
+
+static trigger_irq_pkt_t trigger_irq = {
+    .magic = TRIGGER_IRQ_MAGIC,
+    .vector_id = 0xFFFF,           // invalid vector ID (must use constant value as initializer)
+    .int_type = PCI_INT_MODE_NONE, // invalid interrupt type (must use constant value as initializer)
+    .pad = 0
+};
+
+// -- End of globals --
 
 void test_pci_validate_vfio_device(int test_idx, uint32_t offset, uint32_t value)
 {
@@ -43,9 +54,11 @@ void test_pci_validate_vfio_device(int test_idx, uint32_t offset, uint32_t value
     pci_device_info_t *dev_info = pci_find_by_id(PCI_VENDOR_ID_VFIO, PCI_DEVICE_ID_VFIO);
     if (!dev_info)
         return;
-
-    printf(UI_COLOR_CYAN "[TEST %d]" UI_STYLE_RESET " Initiating PCI validation sequence for PCI device: 0x%04X:0x%04X\r\n", test_idx, PCI_VENDOR_ID_VFIO, PCI_DEVICE_ID_VFIO);
-
+    // clang-format off
+    printf(UI_COLOR_CYAN "[TEST %d]" UI_STYLE_RESET
+                         "Initiating PCI validation sequence for PCI device: 0x%04X:0x%04X\r\n",
+                         test_idx, PCI_VENDOR_ID_VFIO, PCI_DEVICE_ID_VFIO);
+    // clang-format on
     LOG_PCI_INFO("[TEST %d] Starting PCI validation sequence", test_idx);
     LOG_PCI_DEBUG("VFIO device identified at %02x:%02x.%x", dev_info->bus, dev_info->dev, dev_info->func);
 
@@ -59,9 +72,7 @@ void test_pci_validate_vfio_device(int test_idx, uint32_t offset, uint32_t value
 
     cmd = pci_read_config_word(dev_info, PCI_CONFIG_COMMAND);
     uint32_t flipped_cmd = cmd ^ PCI_COMMAND_INTX_DISABLE;
-
     pci_write_config_word(dev_info, PCI_CONFIG_COMMAND, flipped_cmd);
-
     uint32_t verify_cmd = pci_read_config_word(dev_info, PCI_CONFIG_COMMAND);
 
     if ((verify_cmd & PCI_COMMAND_INTX_DISABLE) != (flipped_cmd & PCI_COMMAND_INTX_DISABLE)) {
@@ -73,21 +84,19 @@ void test_pci_validate_vfio_device(int test_idx, uint32_t offset, uint32_t value
     pci_write_config_word(dev_info, PCI_CONFIG_COMMAND, cmd);
     LOG_PCI_INFO("Configuration space read/write loopback verified");
 
-    void *bar0 = pci_ioremap_bar(dev_info, 0);
+    uint32_t *bar0 = pci_ioremap_bar(dev_info, 0); // get base address of BAR0 for the PCIe device
     if (!bar0) {
         LOG_PCI_WARNING("BAR0 mapping omitted or unconfigured. Skipping structural memory runtime check.");
     } else {
         LOG_PCI_DEBUG("BAR0 mapped to CPU memory address: %p", bar0);
 
-        volatile uint32_t *bar0_addr = (volatile uint32_t *)((uintptr_t)bar0 + offset);
-
-        uint32_t read_val = *bar0_addr;
+        uint32_t read_val = *bar0;
         LOG_PCI_INFO("Initial value at offset 0x%X: 0x%X", offset, read_val);
 
         LOG_PCI_INFO("Writing 0x%X to offset 0x%X", value, offset);
-        *bar0_addr = value;
+        *bar0 = value;
 
-        read_val = *bar0_addr;
+        read_val = *bar0;
         LOG_PCI_INFO("Readback verification value: 0x%X", read_val);
 
         if (read_val == value)
@@ -99,20 +108,20 @@ exit:
     LOG_PCI_INFO("[TEST %d] VFIO Device validation %s", test_idx, pass ? "PASS" : "FAIL");
 }
 
-static bool test_pci_int_vector(void *bar0, uint32_t vector_id, pci_int_mode_t int_type)
+// helper function to trigger a pci interrupt
+static bool test_pci_int_vector(uint32_t *bar0, uint32_t vector_id, pci_int_mode_t int_type)
 {
     bool pass = false;
 
     baseline = pcie_get_int_count(vector_id);
     LOG_PCI_INFO("Capturing vector %u a baseline interrupt count: %u", vector_id, baseline);
 
-    // set write to memory base address
-    bar0_base_addr = (volatile uint32_t *)((uintptr_t)bar0 + 0);
-
     LOG_PCI_INFO("Triggering RTL PCI interrupt via BAR0 write '%s' to PCIe device", STR(TRIGGER_IRQ_MAGIC));
 #ifndef ENABLE_RTOS
+    // In the event loop, we use a 4-byte write to trigger a PCI IRQ with a hardcoded vector ID of 0.
     (void)int_type;
-    *bar0_base_addr = TRIGGER_IRQ_MAGIC; // trigger irq
+    (void)trigger_irq;
+    *bar0 = TRIGGER_IRQ_MAGIC; // trigger irq
     return pass;
 #else
     // RTOS environment
@@ -120,20 +129,14 @@ static bool test_pci_int_vector(void *bar0, uint32_t vector_id, pci_int_mode_t i
     uint32_t discard_bits = 0;
     xTaskNotifyWait(0xFFFFFFFF, 0x00000000, &discard_bits, 0);
 
-    alignas(8) static trigger_irq_pkt_t trigger_irq = {
-        .magic = TRIGGER_IRQ_MAGIC,
-        .vector_id = 0xFFFF,           // invalid vector ID (must use constant value as initializer)
-        .int_type = PCI_INT_MODE_NONE, // invalid interrupt type (must use constant value as initializer)
-        .pad = 0
-    };
     trigger_irq.vector_id = vector_id; // set vector ID to trigger
     trigger_irq.int_type = int_type;   // set interrupt type
-    write64(bar0_base_addr, &trigger_irq);
+    write64(bar0, &trigger_irq);       // a single atomic 8-byte write on both 32-bit and 64-bit platforms
 
     LOG_PCI_INFO("Waiting for interrupt propagation...");
     uint32_t   int_vector_bmp = 0;
     BaseType_t notified = xTaskNotifyWait(0x00000000, 0xFFFFFFFF, &int_vector_bmp, 40);
-    if ((notified == pdTRUE) && (int_vector_bmp & BIT(vector_id))) { // check is vector
+    if ((notified == pdTRUE) && (int_vector_bmp & BIT(vector_id))) { // check is vector index raised
         uint32_t post = pcie_get_int_count(vector_id);
         LOG_PCI_INFO("PCI interrupt verification done. Interrupt vector %u count baseline: %u post: %u", vector_id, baseline, post);
         if (post == baseline + 1) {
@@ -147,7 +150,7 @@ static bool test_pci_int_vector(void *bar0, uint32_t vector_id, pci_int_mode_t i
 #endif
 }
 
-// PCI interrupt test (2.1)
+// PCI interrupt test (2.1 first half of the interrupt test in the event loop)
 void test_pci_int(int test_idx)
 {
     bool pass = false;
@@ -158,10 +161,12 @@ void test_pci_int(int test_idx)
 
     if (!dev_info)
         return;
-
-    printf(UI_COLOR_CYAN "[TEST %d]" UI_STYLE_RESET " Initiating PCI interrupt validation for PCI device: 0x%04X:0x%04X\r\n", test_idx, PCI_VENDOR_ID_VFIO, PCI_DEVICE_ID_VFIO);
-
-    void *bar0 = pci_ioremap_bar(dev_info, 0);
+    // clang-format off
+    printf(UI_COLOR_CYAN "[TEST %d]" UI_STYLE_RESET
+                         " Initiating PCI interrupt validation for PCI device: 0x%04X:0x%04X\r\n",
+                         test_idx, PCI_VENDOR_ID_VFIO, PCI_DEVICE_ID_VFIO);
+    // clang-format on
+    uint32_t *bar0 = pci_ioremap_bar(dev_info, 0);
     if (!bar0) {
         start_next_test = false;
         printf(UI_COLOR_YELLOW "[SYS:PCI]" UI_STYLE_RESET
@@ -171,7 +176,7 @@ void test_pci_int(int test_idx)
         LOG_PCI_INFO("[TEST %d] Starting PCI interrupt validation sequence", test_idx);
     }
 
-    uint32_t       vector_id = 0;                 // interrupt vector id
+    uint32_t       vector_id = 0;                 // interrupt vector id (set to 0 to support both RTOS and non-RTOS setups)
     pci_int_mode_t int_type = dev_info->int_mode; // interrupt type
 
     pass = test_pci_int_vector(bar0, vector_id, int_type);
@@ -195,10 +200,12 @@ void test_pci_int_control(int test_idx)
 
     if (!dev_info)
         return;
-
-    printf(UI_COLOR_CYAN "[TEST %d]" UI_STYLE_RESET " Initiating PCI interrupt control for PCI device: 0x%04X:0x%04X\r\n", test_idx, PCI_VENDOR_ID_VFIO, PCI_DEVICE_ID_VFIO);
-
-    void *bar0 = pci_ioremap_bar(dev_info, 0);
+    // clang-format off
+    printf(UI_COLOR_CYAN "[TEST %d]" UI_STYLE_RESET
+                         " Initiating PCI interrupt control validation for PCI device: 0x%04X:0x%04X\r\n",
+                         test_idx, PCI_VENDOR_ID_VFIO, PCI_DEVICE_ID_VFIO);
+    // clang-format on
+    uint32_t *bar0 = pci_ioremap_bar(dev_info, 0);
     if (!bar0) {
         start_next_test = false;
         printf(UI_COLOR_YELLOW "[SYS:PCI]" UI_STYLE_RESET
@@ -234,6 +241,7 @@ void test_pci_int_control(int test_idx)
     LOG_PCI_INFO("[TEST %d] VFIO Device PCI interrupt control validation %s", test_idx, pass ? "PASS" : "FAIL");
 }
 
+// This is the PCI test entry point. In an RTOS setup, it is invoked by the PCI task. In an event loop, it is called upon the EVT_PCI_TEST event.
 void test_pci(void)
 {
     log_set_level(DOMAIN_SYS, ENTITY_PCI, LOG_LEVEL_DEBUG); // set log level to debug for PCI test
@@ -249,7 +257,7 @@ void test_pci(void)
 }
 
 #ifndef ENABLE_RTOS
-// used in event loop
+// This function is used in the event loop to raise the EVT_PCI_TEST event. It is called by the CLI.
 void pci_test_start(void)
 {
     uint32_t primask = disable_interrupts();
@@ -257,7 +265,7 @@ void pci_test_start(void)
     restore_interrupts(primask);
 }
 
-// PCI interrupt test epilogue (2.2)
+// PCI interrupt test epilogue (2.2 second half of the interrupt test in the event loop)
 void test_pci_post_int(int test_idx)
 {
     bool     pass = false;
