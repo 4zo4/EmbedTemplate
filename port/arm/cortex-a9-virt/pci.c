@@ -26,11 +26,11 @@
 #define PCI_DEVICE_ID_VFIO 0x0dc8
 #define GICV2M_SPI_BASE 48 // Shared Peripheral Interrupt (SPI) IRQ ID base for QEMU's GICv2m MSI frame
 
+#undef MAX_PCI_INT
+#define MAX_PCI_INT 2                 // Maximum number of PCI interrupt vectors supported for the system
 #define MAX_INT_SEQUENCE MAX_SEQUENCE // Maximum PCI interrupt sequence for trampoline generation
-#ifndef MAX_PCI_INT
-#define MAX_PCI_INT 2 // Maximum number of PCI interrupt vectors supported for the system
-#endif
 #if MAX_PCI_INT > MAX_INT_SEQUENCE
+
 #error "MAX_PCI_INT cannot exceed MAX_INT_SEQUENCE"
 #endif
 
@@ -103,11 +103,11 @@ void pcie_int_vector_handler(uint32_t index)
 #else // !ENABLE_RTOS
 void pcie_int_vector_handler(uint32_t index)
 {
-    LOG_PCI_DEBUG("PCI interrupt %u received, event 0x%x set", GICV2M_SPI_BASE + index, EVT_MSI_IDX(index));
+    LOG_PCI_DEBUG("PCI interrupt %u received, event 0x%x set", GICV2M_SPI_BASE + index, EVT_PCI_INT_IDX(index));
 
     pcie_int_stats.count[index]++;
 
-    event_notify |= EVT_MSI_IDX(index);
+    event_notify |= EVT_PCI_INT_IDX(index);
 }
 #endif
 #endif // ENABLE_PCI_INT
@@ -115,21 +115,30 @@ void pcie_int_vector_handler(uint32_t index)
 static int pcie_register_int_vector(pci_device_info_t *dev_info, uint32_t *vector_idx)
 {
 #ifdef ENABLE_PCI_INT
-    if (dev_info->vendor_id != PCI_VENDOR_ID_VFIO &&
+    static uint32_t trampoline_idx = 0;
+    uint32_t        vector_id;
+
+    if (dev_info->vendor_id != PCI_VENDOR_ID_VFIO ||
         dev_info->device_id != PCI_DEVICE_ID_VFIO)
         return -1;
 
     if (dev_info->vector_count >= MAX_PCI_INT)
         return -1; // No more vectors available
 
-    uint32_t vector_id = GICV2M_SPI_BASE + dev_info->vector_count;
+    if (dev_info->int_mode == PCI_INT_MODE_INTX) {
+        vector_id = GICV2M_SPI_BASE; // INTx uses a single vector
+        dev_info->vector_count = MAX_PCI_INT;
+    } else { // MSI and MSI-X use multiple vectors
+        vector_id = GICV2M_SPI_BASE + dev_info->vector_count;
+    }
+
     uint32_t irq_id = vector_id - GICV2M_SPI_BASE;
-
-    gic_register_interrupt(irq_id, pci_trampoline_table[dev_info->vector_count]);
+    gic_register_interrupt(irq_id, pci_trampoline_table[trampoline_idx]);
     gic_enable_interrupt(irq_id, 0x20);
-    *vector_idx = vector_id;
 
+    *vector_idx = vector_id;
     dev_info->vector_count++;
+    trampoline_idx++;
 
     LOG_PCI_INFO("Allocated %s vector %u (IRQ ID: %u) for PCIe device: %04x:%04x (%02x:%02x.%x)", int_mode_to_string(dev_info->int_mode), vector_id, irq_id, dev_info->vendor_id, dev_info->device_id, dev_info->bus, dev_info->dev, dev_info->func);
     return 0;
@@ -140,6 +149,11 @@ static int pcie_register_int_vector(pci_device_info_t *dev_info, uint32_t *vecto
     }
     return -1;
 #endif
+}
+
+uint16_t pci_irq_id_to_vector_idx(uint16_t irq_id)
+{
+    return irq_id - GICV2M_SPI_BASE;
 }
 
 void init_pci(void)

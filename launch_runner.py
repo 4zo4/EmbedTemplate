@@ -212,7 +212,7 @@ def setup_qemu_base_target(target_chip: str, image_elf: Path, uart_sock: Path) -
             "-device", f"loader,file={image_elf},cpu-num=0"
         ]
     elif target_chip == "x86-virt":
-        qemu_bin = "qemu-system-x86_64"
+        qemu_bin = "qemu-system-i386"
         qemu_args = [
             "-M", "q35",
             "-cpu", "pentium3",
@@ -452,7 +452,7 @@ def main():
             print("\033[91m[Monitor] Error: Timeout connecting to QEMU.\033[0m")
             sys.exit(1)
 
-        arch = "arm" if args.chip in arm_chips else "riscv" if args.chip in riscv_chips else "i386:x86-64"
+        arch = "arm" if args.chip in arm_chips else "riscv" if args.chip in riscv_chips else "i386"
         print("\033[92m[Monitor] Spawning Terminal for Serial (socat) Console...\033[0m")
         socat_cmd = [
             "xterm", "-hold", "-title", f"Session {session_id} UART Console {arch}/{args.chip}",

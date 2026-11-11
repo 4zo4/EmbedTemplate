@@ -61,7 +61,7 @@ typedef struct idt_ptr_s {
 #define LAPIC_SIVR (*(volatile uint32_t *)(LAPIC_BASE_ADDRESS + 0x00F0))      // Spurious Interrupt Vector Register
 #define LAPIC_LVT0 (*(volatile uint32_t *)(LAPIC_BASE_ADDRESS + 0x0350))      // Local Vector Table 0 (LINT0) Register
 #define LAPIC_LVT1 (*(volatile uint32_t *)(LAPIC_BASE_ADDRESS + 0x0360))      // Local Vector Table 1 (LINT1) Register
-#define LAPIC_LVT_TIMER (*(volatile uint32_t *)(LAPIC_BASE_ADDRESS + 0x0320)) //
+#define LAPIC_LVT_TIMER (*(volatile uint32_t *)(LAPIC_BASE_ADDRESS + 0x0320)) // Local Timer Register
 
 // -- 8259 PIC Controller I/O Ports --
 #define PIC1_COMMAND 0x20
@@ -72,14 +72,22 @@ typedef struct idt_ptr_s {
 
 void apic_dispatch_interrupt(uint32_t vector_id); // forward declaration for IDT stub
 
+#define IRQ_STACK_SIZE 1024U
+alignas(16) static uint8_t irq_stack[IRQ_STACK_SIZE];
+uintptr_t irq_stack_top = (uintptr_t)&irq_stack[IRQ_STACK_SIZE];
+
 #define DEF_IDT_STUB(index) \
     __attribute__((naked)) static void idt_stub_##index(void) \
     { \
         __asm__ volatile( \
             "pushal\n\t" \
+            "cld\n\t" \
+            "movl %%esp, %%ebx\n\t" \
+            "movl irq_stack_top, %%esp\n\t" \
+            "subl $12, %%esp\n\t" \
             "pushl %0\n\t" \
             "call apic_dispatch_interrupt\n\t" \
-            "addl $4, %%esp\n\t" \
+            "movl %%ebx, %%esp\n\t" \
             "popal\n\t" \
             "iretl\n\t" \
             : \
@@ -96,15 +104,15 @@ enum {
     VECTOR_PIT = X86_IRQ_VECTOR_BASE,                        // IRQ 0: PIT
     VECTOR_UART = X86_IRQ_VECTOR_BASE + UART_IRQ_ID,         // IRQ 4: UART NS16550 Serial console COM1
     VECTOR_TIMER = X86_IRQ_VECTOR_BASE + LAPIC_TIMER_IRQ_ID, // IRQ 15: LAPIC Timer
-    VECTOR_MSI0 = MSI_IRQ_VECTOR_BASE,                       // IRQ 16: MSI Vector 0
-    VECTOR_MSI1 = MSI_IRQ_VECTOR_BASE + 1,                   // IRQ 17: MSI Vector 1
-    MAX_IRQ_VECTOR = VECTOR_MSI1                             // MAX_IRQ_VECTOR must be the last vector id in the list
+    VECTOR_PCI_INT0 = PCI_IRQ_VECTOR_BASE,                   // IRQ 16: PCI Int Vector 0
+    VECTOR_PCI_INT1 = PCI_IRQ_VECTOR_BASE + 1,               // IRQ 17: PCI Int Vector 1
+    MAX_IRQ_VECTOR = VECTOR_PCI_INT1                         // MAX_IRQ_VECTOR must be the last vector id in the list
 };
 
 // -- Globals --
 
 static const uint8_t vector_id[] = {
-    VECTOR_PIT, VECTOR_UART, VECTOR_TIMER, VECTOR_MSI0, VECTOR_MSI1
+    VECTOR_PIT, VECTOR_UART, VECTOR_TIMER, VECTOR_PCI_INT0, VECTOR_PCI_INT1
 };
 
 static irq_handler_t irq_handler_table[MAX_IRQS];
@@ -119,8 +127,8 @@ alignas(16) static idt_ptr_t idt_ptr;
 DEF_IDT_STUB(0); // PIT
 DEF_IDT_STUB(1); // UART
 DEF_IDT_STUB(2); // LAPIC Timer
-DEF_IDT_STUB(3); // MSI 0
-DEF_IDT_STUB(4); // MSI 1
+DEF_IDT_STUB(3); // PCI Int 0
+DEF_IDT_STUB(4); // PCI Int 1
 
 static void idt_set_gate(uint8_t vector, irq_handler_t handler)
 {
@@ -263,7 +271,7 @@ void apic_dispatch_interrupt(uint32_t vector_id)
         uint32_t irq_id = vector_id - X86_IRQ_VECTOR_BASE;
         if (irq_id <= MAX_IRQ_ID) {
             int idx = irq_lookup_table[irq_id];
-#ifdef ENABLE_SEFETY_CHECK
+#ifdef ENABLE_SAFETY_CHECK
             if (idx < irq_count && irq_handler_table[idx] != nullptr)
                 irq_handler_table[idx]();
 #else
@@ -274,7 +282,7 @@ void apic_dispatch_interrupt(uint32_t vector_id)
 
     // Line originated from legacy PIC block
     if (vector_id >= X86_IRQ_VECTOR_BASE &&
-        vector_id < (MSI_IRQ_VECTOR_BASE)) {
+        vector_id < (PCI_IRQ_VECTOR_BASE)) {
         if (vector_id >= (X86_IRQ_VECTOR_BASE + 8)) {
             outb(PIC2_COMMAND, PIC_EOI);
         }

@@ -1,16 +1,16 @@
 #pragma once
 
 #define MAX_IRQS 32
-#define MAX_IRQ_ID (MSI_IRQ_OFFSET + 8)
+#define MAX_IRQ_ID (PCI_IRQ_OFFSET + 8)
 
 #ifdef ENABLE_RTOS
 #define X86_IRQ_VECTOR_BASE 0x30 // Priority Class 3
 #else                            // !RTOS
 #define X86_IRQ_VECTOR_BASE 0x30
 #endif
-#define MSI_IRQ_OFFSET 16
+#define PCI_IRQ_OFFSET 16
 #define LEGACY_VECTOR_BASE 0x20
-#define MSI_IRQ_VECTOR_BASE (X86_IRQ_VECTOR_BASE + MSI_IRQ_OFFSET) // Priority Class 4
+#define PCI_IRQ_VECTOR_BASE (X86_IRQ_VECTOR_BASE + PCI_IRQ_OFFSET) // Priority Class 4
 
 #define PIT_IRQ_ID 0U          // PIT is physically wired to IO-APIC GSI Pin 0
 #define UART_IRQ_ID 4U         // COM1 routes to IO-APIC GSI Pin 4

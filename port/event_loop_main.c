@@ -72,8 +72,8 @@ int main(void)
             if (event & EVT_PCI_TEST) { // is PCI Test event
                 test_pci();             // start PCI test (1)
             }
-            if (event & EVT_MSI_MASK) { // is PCI interrupt event
-                test_pci_post_int(2);   // PCI interrupt test epilogue (2.2)
+            if (event & EVT_PCI_INT_MASK) { // is PCI interrupt event
+                test_pci_post_int(2);       // PCI interrupt test epilogue (2.2)
             }
 #endif
             if (event & EVT_SYS_TICK) { // is SysTick event

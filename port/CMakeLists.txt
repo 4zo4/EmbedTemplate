@@ -6,7 +6,6 @@ set(STARTUP_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/init_hw.c)
 if(BARE_METAL)
     list(APPEND STARTUP_SOURCES ${TARGET_CHIP_SOURCES})
     set_property(SOURCE ${TARGET_CHIP_SOURCES} APPEND PROPERTY COMPILE_DEFINITIONS ${EXTRA_FLAGS})
-    set_property(SOURCE ${TARGET_CHIP_SOURCES} APPEND PROPERTY COMPILE_OPTIONS "-O3")
 endif()
 
 if(RTOS)
@@ -104,5 +103,7 @@ target_include_directories(runner PRIVATE
     $<$<BOOL:${BARE_METAL}>:${COMMON_INC_DIR}/lib/libc>
 )
 
-target_compile_options(runner PRIVATE -fno-builtin-printf -fno-builtin-puts -Wall -Wextra -O3)
+set(OFLAGS -O3)
+set(DFLAGS -g -O0)
+target_compile_options(runner PRIVATE -fno-builtin-printf -fno-builtin-puts -Wall -Wextra ${OFLAGS})
 target_link_options(runner PRIVATE "-Wl,-Map=runner.map")

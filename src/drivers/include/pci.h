@@ -1,6 +1,8 @@
-
 #pragma once
 
+#define MAX_PCI_INT 8 // Maximum number of PCI interrupt vectors supported for the system
+                      // This equals the maximum PCI interrupt sequence for trampoline generation
+                      // This equals the maximum number of interrupt vectors configured in capability structures for the PCI Cosim Bridge
 #define MAX_PCI_DEVICES 24
 #define MAX_PCI_BRIDGES 2
 #define MAX_FUNCTIONS 8
@@ -44,8 +46,10 @@ typedef struct {
     uint8_t  header_type;
     uint16_t vendor_id;
     uint16_t device_id;
-    uint8_t  int_mode;
+    uint8_t  int_mode;           // Interrupt mode: None, INTx, MSI, or MSI-X
     uint8_t  vector_count;       // Number of allocated interrupt vectors for this device
+    uint8_t  cap_off;            // Offset of the MSI|MSI-X capability
+    uint8_t  bar_idx;            // Index of the MSI-X BAR for this device (if applicable)
     uint32_t bar_size[MAX_BARS]; // Endpoints have up to 6 BARs; Bridges have 2
     uint32_t bar_address[MAX_BARS];
 } pci_device_info_t;
@@ -66,7 +70,7 @@ typedef struct {
 } pci_bridge_info_t;
 
 typedef struct {
-    uint16_t          flags;
+    uint16_t          flags; // Bit 15: PCI Scanned Flag
     uint16_t          device_count;
     uint16_t          bridge_count;
     pci_device_info_t device_info[MAX_PCI_DEVICES];
@@ -97,6 +101,19 @@ void pci_set_master(pci_device_info_t *dev);
 
 void pci_config_device_resources(pci_device_info_t *dev);
 void pci_dump_device_database(void);
+
+#define INT_ID_VEC_ID 0
+#define INT_ID_IRQ_ID 1
+typedef struct {
+    uint16_t type; // interrupt id: 0=vector id, 1=irq_id
+    union {
+        uint16_t vec_id; // Vector Id value
+        uint16_t irq_id; // Irq Id value
+    } is;
+} pci_int_id_t;
+
+int pci_enable_interrupt(pci_device_info_t *dev, pci_int_id_t int_id);
+int pci_disable_interrupt(pci_device_info_t *dev, pci_int_id_t int_id);
 
 const char *int_mode_to_string(pci_int_mode_t int_mode);
 

@@ -2,6 +2,7 @@ set(ARCH_WIDTH 32 PARENT_SCOPE)
 set(TARGET_CHIP_FLAGS
     -m32
     -march=i686
+    -ffreestanding
     -fno-builtin-printf
     -fno-builtin-puts
 )

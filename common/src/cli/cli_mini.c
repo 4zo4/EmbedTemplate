@@ -20,6 +20,7 @@
 
 // prototypes without include file
 bool stdin_ready(int timeout_ms);
+void pci_test_start(void);
 
 // guard macro substitutions for standard i/o functions
 #undef getchar
@@ -266,7 +267,12 @@ static uint32_t cli_tokenize(char *str, int len, uint32_t *bitmap)
 
 const char *cmds[] = {
     "set",
+#ifdef ENABLE_PCI
+    "show",
+    "pci"
+#else
     "show"
+#endif
 };
 const char *args[] = {
     "logs",
@@ -283,7 +289,11 @@ static void on_help(int cmd)
         printf("Usage: show [logs|stats]\r\n");
         break;
     default:
+#ifdef ENABLE_PCI
+        printf("Usage: <set|show|pci>\r\n");
+#else
         printf("Usage: <set|show>\r\n");
+#endif
         break;
     }
 }
@@ -335,14 +345,15 @@ static void cli_process_str(char *str, int len, uint32_t *bitmap)
     }
     int cmd = NULL_TOKEN;
 
-    for (int i = 0; i < 2; i++) {
+    int num_cmds = sizeof(cmds) / sizeof(cmds[0]);
+    for (int i = 0; i < num_cmds; i++) {
         if (strcmp(str + tkn[0], cmds[i]) == 0) {
             cmd = i;
             break;
         }
     }
 
-    if (str[tkn[1]] == '?') {
+    if (tkn[1] < len && str[tkn[1]] == '?') {
         on_help(cmd);
         return;
     }
@@ -364,6 +375,13 @@ static void cli_process_str(char *str, int len, uint32_t *bitmap)
                 show_stats_log();
         }
         break;
+#if defined(BARE_METAL) && defined(ENABLE_PCI)
+    case 2:
+        if (tkn[1] == NULL_TOKEN) {
+            pci_test_start();
+        }
+        break;
+#endif
     }
 }
 
@@ -408,6 +426,11 @@ bool cli_run(void *cli_ctx)
         return false;
 
     if (c == '\r' || c == '\n') {
+        if (rxCount == 0) {
+            printf("\r\n> ");
+            fflush(stdout);
+            return true;
+        }
         cli_process(c);
     } else if (c == CHAR_BACKSPACE || c == '\b') {
         cli_clear_last_char();

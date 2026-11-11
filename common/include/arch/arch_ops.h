@@ -31,6 +31,16 @@
     static inline void enable_interrupts(void) {
         __asm volatile("cpsie i" : : : "memory");
     }
+    static inline void write64(volatile void *addr, const void *data) {
+        __asm__ volatile(
+            "vldr d0, [%0]\n\t"
+            "vstr d0, [%1]\n\t"
+            "dsb st"
+            :
+            : "r"(data), "r"(addr)
+            : "d0", "memory"
+        );
+    }
     static inline void io_barrier(void) { __asm__ volatile("dsb sy" : : : "memory"); }
     #define memory_barrier() __asm volatile("dmb sy" : : : "memory") /* Data Memory Barrier */
     #define data_sync_barrier() __asm volatile("dsb sy" : : : "memory") /* Data Synchronization Barrier */
@@ -48,6 +58,16 @@
     }
     static inline void enable_interrupts(void) {
         __asm volatile("msr daifclr, #2" : : : "memory");
+    }
+    static inline void write64(volatile void *addr, const void *data) {
+        uint64_t val = *(const uint64_t *)data;
+        __asm__ volatile(
+            "str %0, [%1]\n\t"
+            "dsb st"
+            :
+            : "r"(val), "r"(addr)
+            : "memory"
+        );
     }
     static inline void io_barrier(void) { __asm__ volatile("dsb sy" : : : "memory"); }
     #define memory_barrier() __asm volatile("dmb sy" : : : "memory")
@@ -89,6 +109,29 @@
     static inline void enable_interrupts(void) {
         __asm volatile ("csrsi mstatus, 8" : : : "memory");
     }
+    static inline void write64(volatile void *addr, const void *data) {
+    #if (__riscv_xlen == 64)
+        uint64_t val = *(const uint64_t *)data;
+        __asm__ volatile(
+            "sd %0, 0(%1)\n\t"
+            "fence w, o"
+            :
+            : "r"(val), "r"(addr)
+            : "memory"
+        );
+    #elif defined(__riscv_flen) && (__riscv_flen == 64) // RV32D with double-precision floating-point support
+        __asm__ volatile(
+            "fld ft0, 0(%0)\n\t"
+            "fsd ft0, 0(%1)\n\t"
+            "fence w, o"
+            :
+            : "r"(data), "r"(addr)
+            : "ft0", "memory"
+        );
+    #else
+        static_assert(0, "64-bit atomic PCIe writes require RV64 or RV32D");
+    #endif
+    }
     static inline void io_barrier(void) { __asm__ volatile("fence io, io" : : : "memory"); }
     #define memory_barrier() __asm volatile("fence iorw, iorw" : : : "memory")
     #define data_sync_barrier() __asm volatile("fence iorw, iorw" : : : "memory")
@@ -119,6 +162,17 @@
     }
     static inline void enable_interrupts(void) {
         __asm__ volatile (INCODE"sti" : : : "memory");
+    }
+    static inline void write64(volatile void *addr, const void *data) {
+        __asm__ volatile(
+            INCODE"movq (%0), %%mm0\n\t"
+            INCODE"movq %%mm0, (%1)\n\t"
+            INCODE"emms\n\t"
+            INCODE"sfence"
+            :
+            : "r"(data), "r"(addr)
+            : "memory"
+        );
     }
     #define memory_barrier() __asm volatile(INCODE"mfence" : : : "memory")
     #define data_sync_barrier() __asm volatile(INCODE"sfence" : : : "memory")

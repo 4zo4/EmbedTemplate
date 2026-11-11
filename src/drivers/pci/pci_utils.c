@@ -12,16 +12,15 @@ int pci_enable_device(pci_device_info_t *dev)
 {
     uint32_t cmd = pci_read_config_dword(dev, PCI_CONFIG_COMMAND);
     cmd |= (PCI_COMMAND_MEMORY | PCI_COMMAND_IO);
-    pci_write_config_dword(dev, PCI_CONFIG_COMMAND, cmd);
-
+    pci_write_config_word(dev, PCI_CONFIG_COMMAND, cmd);
     return 0;
 }
 
-void pci_set_master(pci_device_info_t *dev)
+void pci_master(pci_device_info_t *dev)
 {
     uint32_t cmd = pci_read_config_dword(dev, PCI_CONFIG_COMMAND);
     cmd |= PCI_COMMAND_MASTER;
-    pci_write_config_dword(dev, PCI_CONFIG_COMMAND, cmd);
+    pci_write_config_word(dev, PCI_CONFIG_COMMAND, cmd);
 }
 
 void *pci_ioremap_bar(pci_device_info_t *dev, int bar)
@@ -184,7 +183,7 @@ void pci_config_device_resources(pci_device_info_t *dev)
     // clang-format on
 
     uint32_t old_cmd = pci_read_config_dword(dev, PCI_CONFIG_COMMAND);
-    pci_write_config_dword(dev, PCI_CONFIG_COMMAND, old_cmd & ~0x3);
+    pci_write_config_word(dev, PCI_CONFIG_COMMAND, old_cmd & ~0x3);
 
     for (int bar_idx = 0; bar_idx < MAX_BARS; bar_idx++) {
         if (dev->bar_size[bar_idx] == 0)
@@ -273,7 +272,7 @@ void pci_config_device_resources(pci_device_info_t *dev)
         }
     }
     pci_enable_device(dev);
-    pci_set_master(dev);
+    pci_master(dev);
 }
 
 const char *int_mode_to_string(pci_int_mode_t int_mode)
@@ -290,4 +289,84 @@ const char *int_mode_to_string(pci_int_mode_t int_mode)
     default:
         return "Unknown";
     }
+}
+
+uint16_t pci_irq_id_to_vector_idx(uint16_t irq_id); // Forward declaration for platform-specific implementation
+
+#define VEC_CTRL_REG(bar_addr, table_off, tbl_idx) (*(volatile uint32_t *)(uintptr_t)(bar_addr + table_off + (tbl_idx * 16) + 12))
+
+static int msix_vector_control(pci_device_info_t *dev, uint16_t vector_id, bool enable)
+{
+    uint64_t bar_addr = dev->bar_address[dev->bar_idx];
+    if (bar_addr == 0)
+        return -2; // BAR not mapped
+
+    uint32_t table_reg = pci_read_config_dword(dev, dev->cap_off + 0x04);
+    uint32_t table_off = table_reg & 0xFFFFFFF8;
+
+    VEC_CTRL_REG(bar_addr, table_off, vector_id) = enable ? 0x00000000U : 0x00000001U;
+    return 0;
+}
+
+static int msi_vector_control(pci_device_info_t *dev, uint16_t vector_id, bool enable)
+{
+    uint16_t msg_ctrl = pci_read_config_word(dev, dev->cap_off + 2);
+
+    if ((msg_ctrl & BIT(8)) != 0) {
+        uint32_t mask_off = (msg_ctrl & BIT(7)) ? 16 : 12;
+        uint32_t mask_val = pci_read_config_dword(dev, dev->cap_off + mask_off);
+
+        if (enable)
+            mask_val &= ~BIT(vector_id);
+        else
+            mask_val |= BIT(vector_id);
+
+        pci_write_config_dword(dev, dev->cap_off + mask_off, mask_val);
+        return 0;
+    }
+    return -1; // Per-vector masking not supported
+}
+
+#define PCI_INTX_REG 0x3C
+#define PCI_INTX_DISABLE BIT(10)
+static int intx_irq_control(pci_device_info_t *dev, bool enable)
+{
+    uint32_t int_reg = pci_read_config_dword(dev, PCI_INTX_REG);
+    if (((int_reg >> 8) & 0xFF) == 0)
+        return -1; // No legacy INTx pin assigned
+
+    uint32_t cmd = pci_read_config_dword(dev, PCI_CONFIG_COMMAND);
+    if (enable)
+        cmd &= ~PCI_INTX_DISABLE;
+    else
+        cmd |= PCI_INTX_DISABLE;
+
+    pci_write_config_word(dev, PCI_CONFIG_COMMAND, cmd);
+    return 0;
+}
+
+static int pci_toggle_interrupt(pci_device_info_t *dev, uint16_t vector_id, bool enable)
+{
+    switch (dev->int_mode) {
+    case PCI_INT_MODE_MSI:
+        return msi_vector_control(dev, vector_id, enable);
+    case PCI_INT_MODE_MSIX:
+        return msix_vector_control(dev, vector_id, enable);
+    case PCI_INT_MODE_INTX:
+        return intx_irq_control(dev, enable);
+    default:
+        return -1; // Interrupt mode not supported
+    }
+}
+
+int pci_enable_interrupt(pci_device_info_t *dev, pci_int_id_t int_id)
+{
+    uint16_t vector_id = int_id.type == INT_ID_IRQ_ID ? pci_irq_id_to_vector_idx(int_id.is.irq_id) : int_id.is.vec_id;
+    return pci_toggle_interrupt(dev, vector_id, true);
+}
+
+int pci_disable_interrupt(pci_device_info_t *dev, pci_int_id_t int_id)
+{
+    uint16_t vector_id = int_id.type == INT_ID_IRQ_ID ? pci_irq_id_to_vector_idx(int_id.is.irq_id) : int_id.is.vec_id;
+    return pci_toggle_interrupt(dev, vector_id, false);
 }

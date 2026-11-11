@@ -141,7 +141,7 @@ void ioapic_eoi(uint32_t vector_id)
     }
 #if (X86_IRQ_VECTOR_BASE != LEGACY_VECTOR_BASE)
     if ((vector_id >= X86_IRQ_VECTOR_BASE &&
-         vector_id < (MSI_IRQ_VECTOR_BASE))) {
+         vector_id < (PCI_IRQ_VECTOR_BASE))) {
         if (vector_id >= (X86_IRQ_VECTOR_BASE + 8)) {
             outb(PIC2_COMMAND, PIC_EOI);
         }
