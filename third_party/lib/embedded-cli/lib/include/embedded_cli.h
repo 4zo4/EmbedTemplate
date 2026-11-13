@@ -189,12 +189,19 @@ struct EmbeddedCliConfig {
  * <li>historyBufferSize = 128</li>
  * <li>cliBuffer = NULL (use dynamic allocation)</li>
  * <li>cliBufferSize = 0</li>
- * <li>maxBindingCount = 8</li>
+ * <li>maxBindingCount = MAX_BINDINGS - 1</li>
  * <li>enableAutoComplete = true</li>
  * </ul>
- * @return configuration for cli creation
+ * @return default configuration for cli creation
  */
 EmbeddedCliConfig *embeddedCliDefaultConfig(void);
+
+/**
+ * Returns pointer to cli configuration.
+ * This function should be called after CLI is initialized.
+ * @return configuration for cli
+ */
+EmbeddedCliConfig *embeddedCliGetConfig(void);
 
 /**
  * Returns how many space in config buffer is required for cli creation

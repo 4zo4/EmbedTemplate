@@ -380,8 +380,16 @@ void show_version(EmbeddedCli *cli, char *args, int count)
 
 void show_config(EmbeddedCli *cli, char *args, int count)
 {
-    char msg[64] = "Config:\r\n";
-    snprintf(msg + 9, sizeof(msg) - 9, " CLI binding count %u", embeddedCliGetBindingsCount(cli));
+    char msg[128] = "Config:\r\n";
+    uint16_t bindings_count = embeddedCliGetBindingsCount(cli);
+    uint16_t bindings_size = bindings_count * sizeof(CliCommandBinding);
+    EmbeddedCliConfig *config = embeddedCliGetConfig();
+    uint16_t allocated_size = embeddedCliRequiredSize(config);
+    uint16_t max_bindings_count = config->maxBindingsCount;
+    config->maxBindingsCount = bindings_count;
+    uint16_t required_size = embeddedCliRequiredSize(config);
+    config->maxBindingsCount = max_bindings_count;
+    snprintf(msg + 9, sizeof(msg) - 9, " CLI binding count %u (%u bytes) CLI buffer required %u allocated %u bytes", bindings_count, bindings_size, required_size, allocated_size);
     embeddedCliPrint(cli, msg);
 }
 

@@ -481,6 +481,10 @@ EmbeddedCliConfig *embeddedCliDefaultConfig(void) {
     return &defaultConfig;
 }
 
+EmbeddedCliConfig *embeddedCliGetConfig(void) {
+    return &defaultConfig;
+}
+
 uint16_t embeddedCliRequiredSize(EmbeddedCliConfig *config) {
     uint16_t bindingsCount = (uint16_t) (config->maxBindingsCount + CLI_INTERNAL_BINDING_COUNT);
 

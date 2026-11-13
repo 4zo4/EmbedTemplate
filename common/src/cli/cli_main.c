@@ -76,15 +76,15 @@ cli_data_t cli_data = {
 
 #ifdef ENABLE_TEST
 #define CLI_MAX_BINDINGS (MAX_BINDINGS - 1)
-#define CLI_MEM_SIZE 4096
 #define MAP_APP_CONTEXT 0x3
 #define NUM_APP_CONTEXT 4
 #else
 #define CLI_MAX_BINDINGS (18 - 1)
-#define CLI_MEM_SIZE 1216
 #define MAP_APP_CONTEXT 0x1
 #define NUM_APP_CONTEXT 1
 #endif
+#define CLI_CORE_SIZE 784 // embedded CLI core size
+#define CLI_MEM_SIZE ((CLI_MAX_BINDINGS + 1) * sizeof(CliCommandBinding) + CLI_CORE_SIZE)
 
 __attribute__((section(".cli_mem"), used)) static alignas(8) uint64_t cli_mem[CLI_MEM_SIZE / sizeof(uint64_t)];
 static struct termios orig_termios;
@@ -396,9 +396,9 @@ int cli_init(void **cli_ctx)
     config->cliBuffer = (typeof(config->cliBuffer))cli_mem;
     config->cliBufferSize = CLI_MEM_SIZE;
 
-    uint16_t requiredCliBufferSize = embeddedCliRequiredSize(config);
+    uint16_t required_size = embeddedCliRequiredSize(config);
 
-    printf("\r[INFO] CLI buffer (%p) allocated " STR(CLI_MEM_SIZE) " required %u bytes\n", cli_mem, requiredCliBufferSize);
+    printf("\r[INFO] CLI buffer (%p) required %u allocated %u bytes\n", cli_mem, required_size, CLI_MEM_SIZE);
     EmbeddedCli *cli = embeddedCliNew(config);
 
     if (cli == nullptr) {
