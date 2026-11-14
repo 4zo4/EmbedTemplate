@@ -110,6 +110,7 @@
         __asm volatile ("csrsi mstatus, 8" : : : "memory");
     }
     static inline void write64(volatile void *addr, const void *data) {
+#ifdef ENABLE_PCI
     #if (__riscv_xlen == 64)
         uint64_t val = *(const uint64_t *)data;
         __asm__ volatile(
@@ -131,6 +132,10 @@
     #else
         static_assert(0, "64-bit atomic PCIe writes require RV64 or RV32D");
     #endif
+#else
+    (void)addr;
+    (void)data;
+#endif
     }
     static inline void io_barrier(void) { __asm__ volatile("fence io, io" : : : "memory"); }
     #define memory_barrier() __asm volatile("fence iorw, iorw" : : : "memory")
