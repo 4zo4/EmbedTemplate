@@ -10,6 +10,9 @@ set(TARGET_CHIP_FLAGS
 string(JOIN " " CPU_FLAGS ${TARGET_CHIP_FLAGS})
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${CPU_FLAGS}" PARENT_SCOPE)
 set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} ${CPU_FLAGS}" PARENT_SCOPE)
+if(NOT DEFINED ENABLE_SECURE)
+    set(ENABLE_SECURE TRUE)
+endif()
 if(ENABLE_SECURE)
     set(LINKER_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/cortex-m33.ns.ld")
     # Enable the Windowed Watchdog for secure build
@@ -39,7 +42,7 @@ if(ENABLE_SECURE)
         "${CMAKE_SOURCE_DIR}/common/include"
         "${CMAKE_SOURCE_DIR}/common/include/arch"
     )
-    target_compile_options(secure_boot PRIVATE ${TARGET_CHIP_FLAGS} -mcmse -Wall -Wextra -g -O2)
+    target_compile_options(secure_boot PRIVATE ${TARGET_CHIP_FLAGS} -mcmse -Wall -Wextra ${OFLAGS})
     target_link_options(secure_boot PRIVATE
         ${TARGET_CHIP_FLAGS}
         -mcmse

@@ -8,6 +8,7 @@
 #define SYSTICK 3
 #define WATCHDOG 4
 #define PCI 5
+#define BLE 6
 
 #ifndef BIT
 #define BIT(n) (1UL << (n))
@@ -19,6 +20,7 @@
 #define SYSTICK_INITIALIZED BIT(SYSTICK)
 #define WATCHDOG_INITIALIZED BIT(WATCHDOG)
 #define PCI_INITIALIZED BIT(PCI)
+#define BLE_INITIALIZED BIT(BLE)
 
 void init_pci(void);
 void init_uart(void);

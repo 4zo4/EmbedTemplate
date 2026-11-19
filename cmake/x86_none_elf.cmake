@@ -19,6 +19,8 @@ execute_process(
 )
 
 # Disable host-injected glibc security wrappers for bare-metal builds
-set(CMAKE_C_FLAGS_INIT "-fno-pic -fno-pie -mno-sse -mno-mmx -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -fno-stack-protector")
-set(CMAKE_CXX_FLAGS_INIT "-fno-pic -fno-pie -mno-sse -mno-mmx -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -fno-stack-protector")
-set(CMAKE_EXE_LINKER_FLAGS_INIT "-static -nostdlib -no-pie -Wl,--defsym=putc=putchar -Wl,--defsym=getc=getchar")
+set(COMMON_FLAGS "-ffunction-sections -fdata-sections")
+set(CMAKE_C_FLAGS_INIT "${COMMON_FLAGS} -fno-pic -fno-pie -mno-sse -mno-mmx -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -fno-stack-protector")
+set(CMAKE_CXX_FLAGS_INIT "${COMMON_FLAGS} -fno-pic -fno-pie -mno-sse -mno-mmx -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -fno-stack-protector")
+set(CMAKE_ASM_FLAGS_INIT "${COMMON_FLAGS}")
+set(CMAKE_EXE_LINKER_FLAGS_INIT "-Wl,--gc-sections -static -nostdlib -no-pie -Wl,--defsym=putc=putchar -Wl,--defsym=getc=getchar")

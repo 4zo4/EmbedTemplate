@@ -20,8 +20,8 @@ set(SOC_SYSCTRL_SOURCES sysctrl/sysctrl.c)
 set(SOC_TIMER_SOURCES timer/timer.c)
 set(SOC_UART_SOURCES uart/uart.c)
 set(PCI_ABLE_CHIPS "x86-virt" "cortex-a9-virt")
-set(OFLAGS -O3)
-set(DFLAGS "-g\;-O0")
+
+set(DFLAGS "-g\;-O0") # overwrite global flag for use in set_source_files_properties
 
 if(ENABLE_PCI)
     if(NOT "$CACHE{TARGET_CHIP}" IN_LIST PCI_ABLE_CHIPS)

@@ -28,6 +28,10 @@ endif()
 set(CMAKE_C_STANDARD 23)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
+# --- Global Flags ---
+set(OFLAGS -O3)
+set(DFLAGS -g -O0)
+
 # --- Global Options ---
 option(CLI "Full CLI enabled" ON)
 option(RTOS "Rtos enabled" ON)
@@ -58,6 +62,7 @@ if(BARE_METAL)
 endif()
 
 add_subdirectory(third_party)
+add_subdirectory(third_party/net)
 add_subdirectory(src/drivers)
 
 if(TEST)

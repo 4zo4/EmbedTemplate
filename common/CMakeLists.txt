@@ -28,6 +28,10 @@ set(TFA_LIBC_SOURCES
     ${TFA_LIBC_SRC_DIR}/strncmp.c  # Used for "help" prefix checks
     ${TFA_LIBC_SRC_DIR}/strchr.c   # Used for arg parsing
     ${TFA_LIBC_SRC_DIR}/strlcpy.c  # Safer string copying
+    ${TFA_LIBC_SRC_DIR}/memcmp.c
+    ${TFA_LIBC_SRC_DIR}/strlcat.c
+    ${TFA_LIBC_SRC_DIR}/strnlen_secure.c
+    ${TFA_LIBC_SRC_DIR}/strcpy_secure.c
 )
 set(TFA_LIBC_MOCK_SOURCES
     ${MOCK_LIBC_SRC_DIR}/assert.c  # Custom __assert_func + Panic Dump
@@ -55,7 +59,7 @@ if(BARE_METAL)
     target_compile_definitions(tfa_libc_lib PRIVATE BARE_METAL)
 endif()
 # This lib is harden for Bare-Metal: prevent standard library leakage
-target_compile_options(tfa_libc_lib PRIVATE -ffreestanding -nostdlib -fno-builtin -O3)
+target_compile_options(tfa_libc_lib PRIVATE -ffreestanding -nostdlib -fno-builtin ${OFLAGS})
 
 # --- FreeRTOS (freertos_lib) ---
 if(RTOS)
@@ -95,7 +99,7 @@ if(RTOS)
         ${THIS_DIR}/include/os/freertos # freertos config
     )
     target_compile_options(freertos_lib PRIVATE $<$<COMPILE_LANGUAGE:ASM>:-Wa,--no-warn>)
-    target_compile_options(freertos_lib PRIVATE -D_REENTRANT -ffreestanding -fno-builtin -O3)
+    target_compile_options(freertos_lib PRIVATE -D_REENTRANT -ffreestanding -fno-builtin ${OFLAGS})
     if(ENABLE_TARGET_CHIP)
         target_compile_definitions(freertos_lib PRIVATE "${ENABLE_TARGET_CHIP}")
     endif()
@@ -150,19 +154,30 @@ add_library(cli_lib OBJECT ${CLI_SOURCES})
 endif()
 if(BARE_METAL)
     target_compile_definitions(cli_lib PRIVATE BARE_METAL)
+    if(ENABLE_BLE)
+        target_compile_definitions(cli_lib PRIVATE ENABLE_BLE)
+    endif() # ENABLE_BLE
     if(ENABLE_PCI)
         target_compile_definitions(cli_lib PRIVATE ENABLE_PCI)
     endif() # ENABLE_PCI
 endif() # BARE_METAL
 target_include_directories(cli_lib BEFORE PRIVATE ${MOCK_LIBC_INC_DIR})
 target_include_directories(cli_lib PRIVATE ${TARGET_CLI_INC_DIRS})
-target_compile_options(cli_lib PRIVATE -ffreestanding -fno-builtin -O3)
+target_compile_options(cli_lib PRIVATE -ffreestanding -fno-builtin ${OFLAGS})
 
 # --- Infrastructure (infra_lib) ---
 set(INFRA_SOURCES
     ${THIS_DIR}/src/fifo.c
     ${THIS_DIR}/src/diagnostic/logging/log_infra.c
 )
+set(INFRA_INC_DIRS
+    ${THIS_DIR}/include
+    ${ARCH_INC_DIR}
+    ${LOG_INC_DIRS}
+)
+if(RTOS AND ENABLE_BLE)
+    list(APPEND INFRA_SOURCES "${THIS_DIR}/src/net/nimble/hal/hal_uart.c")
+endif()
 add_library(infra_lib OBJECT ${INFRA_SOURCES})
 if(BARE_METAL)
     target_sources(infra_lib PRIVATE ${THIS_DIR}/src/syscalls.c)
@@ -173,11 +188,7 @@ else()
         ${THIS_DIR}/src/lib/libc/posix_utils.c
     )
 endif()
-target_include_directories(infra_lib PRIVATE
-    ${THIS_DIR}/include
-    ${ARCH_INC_DIR}
-    ${LOG_INC_DIRS}
-)
+target_include_directories(infra_lib PRIVATE ${INFRA_INC_DIRS})
 if(LOG_BUF_SIZE)
     set_source_files_properties(
         ${THIS_DIR}/src/diagnostic/logging/log_infra.c
@@ -194,7 +205,7 @@ set_source_files_properties(
     PROPERTIES COMPILE_FLAGS "-finstrument-functions -fno-inline"
 )
 endif()
-target_compile_options(infra_lib PRIVATE -ffreestanding -fno-builtin -O3)
+target_compile_options(infra_lib PRIVATE -ffreestanding -fno-builtin ${OFLAGS})
 
 if(ENABLE_PROF)
     add_subdirectory(src/diagnostic/profiler)
@@ -214,6 +225,6 @@ if(CLI)
         -ffreestanding
         -nostdlib
         -fno-builtin
-        -O3
+        ${OFLAGS}
     )
 endif()
