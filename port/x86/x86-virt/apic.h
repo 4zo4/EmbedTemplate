@@ -13,7 +13,8 @@
 #define PCI_IRQ_VECTOR_BASE (X86_IRQ_VECTOR_BASE + PCI_IRQ_OFFSET) // Priority Class 4
 
 #define PIT_IRQ_ID 0U          // PIT is physically wired to IO-APIC GSI Pin 0
-#define UART_IRQ_ID 4U         // COM1 routes to IO-APIC GSI Pin 4
+#define UART1_IRQ_ID 4U        // COM1 routes to IO-APIC GSI Pin 4
+#define UART2_IRQ_ID 3U        // COM2 routes to IO-APIC GSI Pin 3
 #define LAPIC_TIMER_IRQ_ID 15U // LAPIC LVT Timer
 
 typedef void (*irq_handler_t)(void);

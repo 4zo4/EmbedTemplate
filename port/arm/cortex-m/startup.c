@@ -11,7 +11,8 @@
 // prototypes without include file
 int  main(void);
 void reset_handler(void);
-void UART_irq_handler(void);
+void UART1_irq_handler(void);
+void UART2_irq_handler(void);
 void nmi_handler(void);
 void hard_fault_handler(void);
 void mem_manage_handler(void);
@@ -22,13 +23,14 @@ void WWDG_irq_handler(void);
 void SVC_Handler(void);
 void PendSV_Handler(void);
 void SysTick_Handler(void);
-#if defined(__ARM_ARCH_8M_MAIN__) || defined(__ARM_ARCH_8M_BASE__)
 #define WWDG_VEC 16
-#define UART_VEC 48 // Rx IRQ
+#if defined(__ARM_ARCH_8M_MAIN__) || defined(__ARM_ARCH_8M_BASE__)
+#define UART1_VEC 48 // UART0 Rx IRQ 32
+#define UART2_VEC 50 // UART1 Rx IRQ 34
 void secure_fault_handler(void);
 #else
-#define WWDG_VEC 16
-#define UART_VEC 53 // Rx IRQ
+#define UART1_VEC 53 // USART1 Rx IRQ 37
+#define UART2_VEC 54 // USART2 Rx IRQ 38
 #define secure_fault_handler 0
 #endif
 extern uint32_t _sdata, _edata, _sbss, _ebss, _sidata, _estack;
@@ -101,8 +103,9 @@ void (*const vector_table[])(void) = {
     [14] = 0,                 // 14: PendSV
     [15] = SysTick_Handler,   // 15: SysTick
 #endif
-    [WWDG_VEC] = WWDG_irq_handler, // 16: Watchdog IRQ 0
-    [UART_VEC] = UART_irq_handler, // 37: Cortex-M4 UART1 Rx is IRQ 37 (Vector 53 for Cortex-M4)
-                                   // 32: Cortex-M33 UART0 RX is IRQ 32 (Vector 48 for Cortex-M33 MPS2-AN505)
+    [WWDG_VEC] = WWDG_irq_handler,   // 16: Watchdog IRQ 0
+    [UART1_VEC] = UART1_irq_handler, // 37: Cortex-M4 USART1 Rx is IRQ 37 (Vector 53 for Cortex-M4)
+                                     // 32: Cortex-M33 UART0 RX is IRQ 32 (Vector 48 for Cortex-M33 MPS2-AN505)
+    [UART2_VEC] = UART2_irq_handler,
 };
 // clang-format on

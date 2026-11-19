@@ -102,7 +102,8 @@ uintptr_t irq_stack_top = (uintptr_t)&irq_stack[IRQ_STACK_SIZE];
 // vector list must be sorted in ascending order
 enum {
     VECTOR_PIT = X86_IRQ_VECTOR_BASE,                        // IRQ 0: PIT
-    VECTOR_UART = X86_IRQ_VECTOR_BASE + UART_IRQ_ID,         // IRQ 4: UART NS16550 Serial console COM1
+    VECTOR_UART1 = X86_IRQ_VECTOR_BASE + UART1_IRQ_ID,       // IRQ 4: UART NS16550 Serial console COM1
+    VECTOR_UART2 = X86_IRQ_VECTOR_BASE + UART2_IRQ_ID,       // IRQ 3: UART NS16550 Serial console COM2
     VECTOR_TIMER = X86_IRQ_VECTOR_BASE + LAPIC_TIMER_IRQ_ID, // IRQ 15: LAPIC Timer
     VECTOR_PCI_INT0 = PCI_IRQ_VECTOR_BASE,                   // IRQ 16: PCI Int Vector 0
     VECTOR_PCI_INT1 = PCI_IRQ_VECTOR_BASE + 1,               // IRQ 17: PCI Int Vector 1
@@ -112,7 +113,7 @@ enum {
 // -- Globals --
 
 static const uint8_t vector_id[] = {
-    VECTOR_PIT, VECTOR_UART, VECTOR_TIMER, VECTOR_PCI_INT0, VECTOR_PCI_INT1
+    VECTOR_PIT, VECTOR_UART1, VECTOR_UART2, VECTOR_TIMER, VECTOR_PCI_INT0, VECTOR_PCI_INT1
 };
 
 static irq_handler_t irq_handler_table[MAX_IRQS];
@@ -125,10 +126,11 @@ alignas(16) static idt_ptr_t idt_ptr;
 // -- End of globals --
 
 DEF_IDT_STUB(0); // PIT
-DEF_IDT_STUB(1); // UART
-DEF_IDT_STUB(2); // LAPIC Timer
-DEF_IDT_STUB(3); // PCI Int 0
-DEF_IDT_STUB(4); // PCI Int 1
+DEF_IDT_STUB(1); // UART1
+DEF_IDT_STUB(2); // UART2
+DEF_IDT_STUB(3); // LAPIC Timer
+DEF_IDT_STUB(4); // PCI Int 0
+DEF_IDT_STUB(5); // PCI Int 1
 
 static void idt_set_gate(uint8_t vector, irq_handler_t handler)
 {
@@ -150,6 +152,7 @@ static void init_idt(void)
     IDT_SET_GATE(2);
     IDT_SET_GATE(3);
     IDT_SET_GATE(4);
+    IDT_SET_GATE(5);
 }
 
 #define ENABLE_LEVEL_TRIGGERED
@@ -205,17 +208,20 @@ void init_apic(void)
     outb(0x22, 0x70); // Select the IMCR Register
     outb(0x23, 0x01); // Force NMI and INTR signals to flow through the APIC
 
-    const uint8_t ioapic_uart_irq = IOAPICIRQTBL(UART_IRQ_ID);
-    ioapic_write(ioapic_uart_irq + 1, 0x00000000); // High 32-bits (Destination: APIC ID 0)
+    uint8_t irq_id[] = {UART1_IRQ_ID, UART2_IRQ_ID};
+    for (int i = 0, i < sizeof(irq_id) / sizeof(irq_id[0]); i++) {
+        uint8_t ioapic_uart_irq = IOAPICIRQTBL(irq_id[i]);
+        ioapic_write(ioapic_uart_irq + 1, 0x00000000); // High 32-bits (Destination: APIC ID 0)
 #ifdef ENABLE_LEVEL_TRIGGERED
-    // UART IRQ config Level-Triggered (Bit 15 = 1), Active-Low (Bit 13 = 1)
-    ioapic_write(ioapic_uart_irq, // Low 32-bits (Triggers line unmasking atomically)
-                 (X86_IRQ_VECTOR_BASE + UART_IRQ_ID) | BIT(IRQ_TRIGGER_MODE) | BIT(IRQ_PIN_POLARITY));
+        // UART IRQ config Level-Triggered (Bit 15 = 1), Active-Low (Bit 13 = 1)
+        ioapic_write(ioapic_uart_irq, // Low 32-bits (Triggers line unmasking atomically)
+                     (X86_IRQ_VECTOR_BASE + irq_id[i]) | BIT(IRQ_TRIGGER_MODE) | BIT(IRQ_PIN_POLARITY));
 #else
-    // UART IRQ config Edge-Triggered (Bit 15 = 0), Active-High (Bit 13 = 0)
-    ioapic_write(ioapic_uart_irq, // Low 32-bits (Triggers line unmasking atomically)
-                 (X86_IRQ_VECTOR_BASE + UART_IRQ_ID));
+        // UART IRQ config Edge-Triggered (Bit 15 = 0), Active-High (Bit 13 = 0)
+        ioapic_write(ioapic_uart_irq, // Low 32-bits (Triggers line unmasking atomically)
+                     (X86_IRQ_VECTOR_BASE + irq_id[i]));
 #endif
+    }
 }
 
 int apic_register_interrupt(uint16_t irq_id, irq_handler_t handler)

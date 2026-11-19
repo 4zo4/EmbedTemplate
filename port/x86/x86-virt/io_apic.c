@@ -5,7 +5,6 @@
  * including IO APIC EOI. This implementation complements FreeRTOS GCC/IA32_flat port interrupt framework
  * by providing
  */
-#include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -83,17 +82,20 @@ void init_apic(void)
     outb(0x22, 0x70); // Select the IMCR Register
     outb(0x23, 0x01); // Force NMI and INTR signals to flow through the APIC
 
-    const uint8_t ioapic_uart_irq = IOAPICIRQTBL(UART_IRQ_ID);
-    ioapic_write(ioapic_uart_irq + 1, 0x00000000); // High 32-bits (Destination: APIC ID 0)
+    uint8_t irq_id[] = {UART1_IRQ_ID, UART2_IRQ_ID};
+    for (size_t i = 0; i < sizeof(irq_id) / sizeof(irq_id[0]); i++) {
+        uint8_t ioapic_uart_irq = IOAPICIRQTBL(irq_id[i]);
+        ioapic_write(ioapic_uart_irq + 1, 0x00000000); // High 32-bits (Destination: APIC ID 0)
 #ifdef ENABLE_LEVEL_TRIGGERED
-    // UART IRQ config Level-Triggered (Bit 15 = 1), Active-Low (Bit 13 = 1)
-    ioapic_write(ioapic_uart_irq, // Low 32-bits (Triggers line unmasking atomically)
-                 (VECTOR_BASE + UART_IRQ_ID) | BIT(IRQ_TRIGGER_MODE) | BIT(IRQ_PIN_POLARITY));
+        // UART IRQ config Level-Triggered (Bit 15 = 1), Active-Low (Bit 13 = 1)
+        ioapic_write(ioapic_uart_irq, // Low 32-bits (Triggers line unmasking atomically)
+                     (X86_IRQ_VECTOR_BASE + irq_id[i]) | BIT(IRQ_TRIGGER_MODE) | BIT(IRQ_PIN_POLARITY));
 #else
-    // UART IRQ config Edge-Triggered (Bit 15 = 0), Active-High (Bit 13 = 0)
-    ioapic_write(ioapic_uart_irq, // Low 32-bits (Triggers line unmasking atomically)
-                 (VECTOR_BASE + UART_IRQ_ID));
+        // UART IRQ config Edge-Triggered (Bit 15 = 0), Active-High (Bit 13 = 0)
+        ioapic_write(ioapic_uart_irq, // Low 32-bits (Triggers line unmasking atomically)
+                     (X86_IRQ_VECTOR_BASE + irq_id[i]));
 #endif
+    }
 }
 
 int apic_enable_interrupt(uint16_t irq_id)

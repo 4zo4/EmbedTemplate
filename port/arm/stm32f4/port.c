@@ -10,16 +10,35 @@
 
 #include "common.h"
 #include "init.h"
+#include "stats.h"
 
 // System Clock Speed (168MHz for STM32F4)
 #define CPU_HZ 168000000ULL
 
-// STM32F4 UART Base and Register Definitions (Cortex-M4)
-#define USART1_BASE 0x40011000
-#define USART_SR (*(volatile uint32_t *)(USART1_BASE + 0x00))  // Status Register
-#define USART_DR (*(volatile uint32_t *)(USART1_BASE + 0x04))  // Data Register
-#define USART_CR1 (*(volatile uint32_t *)(USART1_BASE + 0x0C)) // Control Register 1
-#define USART_BRR (*(volatile uint32_t *)(USART1_BASE + 0x08)) // Baud Rate Register
+// stm32f2xx-usart Base and Register Definitions (Cortex-M4)
+#define USART1_BASE 0x40011000UL
+#define USART2_BASE 0x40004400UL
+#define USART3_BASE 0x40004800UL
+#define USART4_BASE 0x40004C00UL
+#define USART5_BASE 0x40005000UL
+#define USART6_BASE 0x40011400UL
+
+#define USART_BASE(n) ( \
+    ((n) == 0)     ? USART1_BASE : \
+        ((n) == 1) ? USART2_BASE : \
+        ((n) == 2) ? USART3_BASE : \
+        ((n) == 3) ? USART4_BASE : \
+        ((n) == 4) ? USART5_BASE : \
+        ((n) == 5) ? USART6_BASE : \
+                     0UL \
+)
+
+#define USART_SR(n) (*(volatile uint32_t *)(USART_BASE(n) + 0x00UL))  // Status Register
+#define USART_DR(n) (*(volatile uint32_t *)(USART_BASE(n) + 0x04UL))  // Data Register
+#define USART_BRR(n) (*(volatile uint32_t *)(USART_BASE(n) + 0x08UL)) // Baud Rate Register
+#define USART_CR1(n) (*(volatile uint32_t *)(USART_BASE(n) + 0x0CUL)) // Control Register 1
+#define USART_CR2(n) (*(volatile uint32_t *)(USART_BASE(n) + 0x10UL)) // Control Register 2
+#define USART_CR3(n) (*(volatile uint32_t *)(USART_BASE(n) + 0x14UL)) // Control Register 3
 
 #define USART_SR_TC BIT(6)      // Transmission Complete
 #define USART_SR_TXE BIT(7)     // Transmit Data Register Empty
@@ -33,25 +52,45 @@ void init_systick_poll(void);
 bool systick_poll(void);
 void systick_reset(void);
 
+static int uart_rx_null(void *arg, uint8_t byte);
+
 // -- Globals --
 
 alignas(8) uint32_t initialized;
+stats_irq_t stats_irq;
+stats_tx_t  stats_tx;
 
 static const irq_config_t peripheral_irqs[] = {
     {0,  RTOS_SAFE_PRIO}, // WWDG
     {37, RTOS_SAFE_PRIO}, // USART1
+    {38, RTOS_SAFE_PRIO}, // USART2
 };
 
+// NimBLE HCI Uart Rx
+int (*uart_rx)(void *arg, uint8_t byte) = uart_rx_null;
+void *cb_arg = nullptr;
+
 // -- End of globals --
+
+static int uart_rx_null(void *arg, uint8_t byte)
+{
+    (void)arg;
+    (void)byte;
+    return 0;
+}
 
 void init_uart(void)
 {
     if (initialized & UART_INITIALIZED)
         return;
-    // Configure baud rate for 115200 assuming System Clock (168 MHz)
+    // Configure USART1 baud rate for 115200 assuming System Clock (168 MHz)
     // Baud = fCK / (8 * (2 - OVER8) * USARTDIV), APB2 Clock (fCK) is 84 MHz for USART1
-    USART_BRR = 0x2D9;
-    USART_CR1 |= (USART_CR1_UE | USART_CR1_TE | USART_CR1_RE | USART_CR1_RXNEIE);
+    USART_BRR(0) = 0x2D9;
+    USART_CR1(0) |= (USART_CR1_UE | USART_CR1_TE | USART_CR1_RE | USART_CR1_RXNEIE);
+
+    // Configure USART2 for 115200 baud (APB1 = 42 MHz) and enable Tx, Rx, RxNE IRQs
+    USART_BRR(1) = 0x16D;
+    USART_CR1(1) |= (USART_CR1_UE | USART_CR1_TE | USART_CR1_RE | USART_CR1_RXNEIE);
 
     nvic_cfg_peripheral_irqs(peripheral_irqs, sizeof(peripheral_irqs) / sizeof(irq_config_t));
 
@@ -63,25 +102,35 @@ void init_uart(void)
 void uart_flush(void)
 {
     // Wait until transmission is complete
-    while (!(USART_SR & USART_SR_TC)) {
+    while (!(USART_SR(0) & USART_SR_TC)) {
         NOP();
     }
+}
+
+// also used for NimBLE HCI Uart Tx
+int uart_tx(int n, int c)
+{
+    stats_tx.count.uart[n]++;
+
+    // Wait until the transmit data register is empty
+    while (!(USART_SR(n) & USART_SR_TXE)) {
+        NOP();
+    }
+    USART_DR(n) = (uint32_t)(c & 0xFF);
+    return c;
 }
 
 int putchar(int c)
 {
-    // Wait until the transmit data register is empty
-    while (!(USART_SR & USART_SR_TXE)) {
-        NOP();
-    }
-    USART_DR = (uint32_t)(c & 0xFF);
-    return c;
+    return uart_tx(0, c);
 }
 
-void UART_irq_handler(void)
+void UART1_irq_handler(void)
 {
-    if (USART_SR & USART_SR_RXNE) {
-        char c = (char)(USART_DR & 0xFF);
+    stats_irq.count.uart[0]++;
+
+    if (USART_SR(0) & USART_SR_RXNE) {
+        char c = (char)(USART_DR(0) & 0xFF);
 
         if (echo_enabled)
             putchar(c);
@@ -90,6 +139,16 @@ void UART_irq_handler(void)
 
         if (!buffered_mode || (c == '\n' || c == '\r'))
             signal_data_ready();
+    }
+}
+
+void UART2_irq_handler(void)
+{
+    stats_irq.count.uart[1]++;
+
+    if (USART_SR(1) & USART_SR_RXNE) {
+        uint8_t c = (USART_DR(1) & 0xFF);
+        uart_rx(cb_arg, c);
     }
 }
 

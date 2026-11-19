@@ -296,7 +296,8 @@ void init_ns_peripherals(void)
     const uint32_t           itns_bank0 = BIT(0) | BIT(3) | BIT(4);
     nvic_itns[0] = itns_bank0;
     // Bank 1 (IRQs 32-63): Routes Bit 0: UART0 RX (IRQ 32) and Bit 1: UART0 TX (IRQ 33)
-    const uint32_t itns_bank1 = BIT(0) | BIT(1);
+    // Bit 2: UART1 RX (IRQ 34), Bit 3: UART1 TX (IRQ 35)
+    const uint32_t itns_bank1 = BIT(0) | BIT(1) | BIT(2) | BIT(3);
     nvic_itns[1] = itns_bank1;
     __asm volatile("dsb; isb");
 

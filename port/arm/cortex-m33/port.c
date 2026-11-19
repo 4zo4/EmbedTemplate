@@ -10,26 +10,23 @@
 
 #include "common.h"
 #include "init.h"
-
-typedef struct stats_irq_s {
-    struct count_s {
-        uint32_t uart;
-        uint32_t wdg;
-    } count;
-} stats_irq_t;
+#include "stats.h"
 
 // System Clock Speed (for Cortex-M33 MPS2-AN505 on QEMU, 25MHz)
 #define CPU_HZ 25000000ULL // 25 MHz
 
-// ARM CMSDK APB UART Base and Register Definitions (Cortex-M33)
+// ARM CMSDK APB UART (cmsdk-apb-uart) Base and Register Definitions (Cortex-M33)
 #define UART0_BASE_NS 0x40200000UL // UART0 on MPS2-AN505
 #define UART0_BASE_SE 0x50200000UL // Secure access
-#define UART0_BASE UART0_BASE_NS
-#define UART0_DATA (*((volatile uint32_t *)(UART0_BASE + 0x00)))
-#define UART0_STATE (*((volatile uint32_t *)(UART0_BASE + 0x04)))
-#define UART0_CTRL (*((volatile uint32_t *)(UART0_BASE + 0x08)))
-#define UART0_BAUDDIV (*((volatile uint32_t *)(UART0_BASE + 0x10)))
-#define UART0_INTSTATUS (*((volatile uint32_t *)(UART0_BASE + 0x0C)))
+#define UART_BASE_NS(n) (UART0_BASE_NS + ((n) * 0x1000UL))
+#define UART_BASE_SE(n) (UART0_BASE_SE + ((n) * 0x1000UL))
+#define UART_BASE(n) UART_BASE_NS(n)
+
+#define UART_DATA(n) (*((volatile uint32_t *)(UART_BASE(n) + 0x00UL)))      // Data Register (R/W)
+#define UART_STATE(n) (*((volatile uint32_t *)(UART_BASE(n) + 0x04UL)))     // Status Register (R/W)
+#define UART_CTRL(n) (*((volatile uint32_t *)(UART_BASE(n) + 0x08UL)))      // Control Register (R/W)
+#define UART_INTSTATUS(n) (*((volatile uint32_t *)(UART_BASE(n) + 0x0CUL))) // Interrupt Status (R) / Clear (W)
+#define UART_BAUDDIV(n) (*((volatile uint32_t *)(UART_BASE(n) + 0x10UL)))   // Baudrate Divider Register (R/W)
 
 // UART State Register Bitmasks
 #define UART_STATE_TX_FULL BIT(0) // Transmit Data Register Full
@@ -43,12 +40,8 @@ typedef struct stats_irq_s {
 #define UART_INTSTATUS_RX BIT(1) // RX Interrupt Pending
 
 // Helper macros for checking UART status
-#define UART_RX_INTERRUPT_PENDING (UART0_INTSTATUS & UART_INTSTATUS_RX)
-#if 0 // Enable this if you want to check for data availability in the UART RX FIFO
-#define UART_DATA_AVAILABLE (UART0_STATE & UART_STATE_RX_FULL)
-#else
-#define UART_DATA_AVAILABLE 1
-#endif
+#define UART_RX_INTERRUPT_PENDING(n) (UART_INTSTATUS(n) & UART_INTSTATUS_RX)
+#define UART_DATA_AVAILABLE(n) (UART_STATE(n) & UART_STATE_RX_FULL)
 
 #ifndef ENABLE_WWDG
 #define ENABLE_WWDG 0 // Enable Window Watchdog (WWDG) for Cortex-M33 on MPS2-AN505
@@ -58,28 +51,48 @@ void init_systick_poll(void);
 bool systick_poll(void);
 void systick_reset(void);
 
+static int uart_rx_null(void *arg, uint8_t byte);
+
 // -- Globals --
 
 alignas(8) uint32_t initialized;
 stats_irq_t stats_irq;
+stats_tx_t  stats_tx;
 
 static const irq_config_t peripheral_irqs[] = {
     {0,  RTOS_SAFE_PRIO}, // WWDG
     {32, RTOS_SAFE_PRIO}, // UART0 RX
+    {34, RTOS_SAFE_PRIO}, // UART1 RX
 };
 
+// NimBLE HCI Uart Rx
+int (*uart_rx)(void *arg, uint8_t byte) = uart_rx_null;
+void *cb_arg = nullptr;
+
 // -- End of globals --
+
+static int uart_rx_null(void *arg, uint8_t byte)
+{
+    (void)arg;
+    (void)byte;
+    return 0;
+}
 
 void init_uart(void)
 {
     if (initialized & UART_INITIALIZED)
         return;
 
-    // Configure baud rate for 115200 assuming System Clock (168 MHz)
-    UART0_CTRL = 0;
-    UART0_BAUDDIV = (CPU_HZ / 115200);
+    // Configure UART0 baud rate for 115200
+    UART_CTRL(0) = 0;
+    UART_BAUDDIV(0) = (CPU_HZ / 115200);
     // Enable Transmission, Reception, and the RX Data Interrupt
-    UART0_CTRL = (UART_CTRL_TX_EN | UART_CTRL_RX_EN | UART_CTRL_RX_INTEN);
+    UART_CTRL(0) = (UART_CTRL_TX_EN | UART_CTRL_RX_EN | UART_CTRL_RX_INTEN);
+
+    // Configure UART1
+    UART_CTRL(1) = 0;
+    UART_BAUDDIV(1) = (CPU_HZ / 115200);
+    UART_CTRL(1) = (UART_CTRL_TX_EN | UART_CTRL_RX_EN | UART_CTRL_RX_INTEN);
 
     nvic_cfg_peripheral_irqs(peripheral_irqs, sizeof(peripheral_irqs) / sizeof(irq_config_t));
 
@@ -91,32 +104,39 @@ void init_uart(void)
 void uart_flush(void)
 {
     // Wait until transmission is complete
-    while (UART0_STATE & UART_STATE_TX_FULL) {
+    while (UART_STATE(0) & UART_STATE_TX_FULL) {
         NOP();
     }
 }
 
-int putchar(int c)
+// also used for NimBLE HCI Uart Tx
+int uart_tx(int n, int c)
 {
+    stats_tx.count.uart[n]++;
+
     // Wait until previous transmission is complete
-    while (UART0_STATE & UART_STATE_TX_FULL) {
+    while (UART_STATE(n) & UART_STATE_TX_FULL) {
         NOP();
     }
-    UART0_DATA = (uint32_t)(c & 0xFF);
+    UART_DATA(n) = (uint32_t)(c & 0xFF);
     return c;
+}
+
+int putchar(int c)
+{
+    return uart_tx(0, c);
 }
 
 // UART0 RX IRQ Handler for Cortex-M33
 // Note that handler share the same name as the Cortex-M4 handler,
 // but the IRQ number is different (32 for M33 vs 37 for M4)
-void UART_irq_handler(void)
+void UART1_irq_handler(void)
 {
-    stats_irq.count.uart++;
+    stats_irq.count.uart[0]++;
 
-    if (UART_RX_INTERRUPT_PENDING && UART_DATA_AVAILABLE) {
-        char c = (char)(UART0_DATA & 0xFF);
-
-        UART0_INTSTATUS = UART_INTSTATUS_RX; // Clear the RX interrupt flag
+    while (UART_RX_INTERRUPT_PENDING(0) && UART_DATA_AVAILABLE(0)) {
+        UART_INTSTATUS(0) = UART_INTSTATUS_RX; // Clear the RX interrupt flag
+        char c = (char)(UART_DATA(0) & 0xFF);
 
         if (echo_enabled)
             putchar(c);
@@ -125,6 +145,17 @@ void UART_irq_handler(void)
 
         if (!buffered_mode || (c == '\n' || c == '\r'))
             signal_data_ready();
+    }
+}
+
+void UART2_irq_handler(void)
+{
+    stats_irq.count.uart[1]++;
+
+    while (UART_RX_INTERRUPT_PENDING(1) && UART_DATA_AVAILABLE(1)) {
+        UART_INTSTATUS(1) = UART_INTSTATUS_RX; // Clear the RX interrupt flag
+        uint8_t c = (UART_DATA(1) & 0xFF);
+        uart_rx(cb_arg, c);
     }
 }
 
