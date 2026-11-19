@@ -54,16 +54,14 @@ def resolve_target_paths(target_chip, image_name):
 
     return project_root, elf_path, bin_path, exe_path
 
-def pci_build_status(target_chip):
-    """Parse CMakeCache.txt to detect if ENABLE_PCI is set."""
+def build_status(target_chip: str, build_flag: str) -> bool:
+    """Parse CMakeCache.txt to detect if a CMake option is set."""
     cache_file = Path(f"build/{target_chip}/CMakeCache.txt")
     if not cache_file.exists():
         return False
-
     with open(cache_file, "r") as f:
         for line in f:
-            # Look for lines ENABLE_PCI:BOOL=ON or ENABLE_PCI:UNINITIALIZED=True
-            if "ENABLE_PCI" in line and any(val in line.upper() for val in ["=ON", "=TRUE", "=1"]):
+            if line.startswith(f"{build_flag}:") and any(val in line.upper() for val in ["=ON", "=TRUE", "=1"]):
                 return True
     return False
 
@@ -168,14 +166,14 @@ def start_pcie_cosim_bridge(debug=False):
 
     return bridge_proc, bridge_image
 
-def setup_qemu_base_target(target_chip: str, image_elf: Path, uart_sock: Path) -> tuple[str, list[str]]:
+def setup_qemu_base_target(target_chip: str, image_elf: Path, uart_sock: list[Path], wait: bool) -> tuple[str, list[str]]:
     """Return QEMU binary and arguments based on the target chip."""
     if target_chip == "stm32f4":
         qemu_bin = "qemu-system-arm"
         qemu_args = [
             "-M", "netduinoplus2",
             "-nographic",
-            "-serial", f"unix:{uart_sock},server=on,wait=on",
+            "-serial", f"unix:{uart_sock[0]},server=on,wait=on",
             "-kernel", str(image_elf),
         ]
     elif target_chip == "cortex-a9-virt":
@@ -185,7 +183,7 @@ def setup_qemu_base_target(target_chip: str, image_elf: Path, uart_sock: Path) -
             "-cpu", "cortex-a15",
             "-m", "128M",
             "-display", "none",
-            "-serial", f"unix:{uart_sock},server=on,wait=on",
+            "-serial", f"unix:{uart_sock[0]},server=on,wait=on",
             "-device", f"loader,file={image_elf},cpu-num=0",
         ]
     elif target_chip == "cortex-m33":
@@ -196,7 +194,7 @@ def setup_qemu_base_target(target_chip: str, image_elf: Path, uart_sock: Path) -
             "-cpu", "cortex-m33",
             "-m", "16M",
             "-display", "none",
-            "-serial", f"unix:{uart_sock},server=on,wait=on",
+            "-serial", f"unix:{uart_sock[0]},server=on,wait=on",
             "-device", f"loader,file={secure_boot_elf},cpu-num=0",
             "-device", f"loader,file={image_elf}",
         ]
@@ -208,7 +206,7 @@ def setup_qemu_base_target(target_chip: str, image_elf: Path, uart_sock: Path) -
             "-m", "32M",
             "-display", "none",
             "-bios", "none",
-            "-serial", f"unix:{uart_sock},server=on,wait=on",
+            "-serial", f"unix:{uart_sock[0]},server=on,wait=on",
             "-device", f"loader,file={image_elf},cpu-num=0"
         ]
     elif target_chip == "x86-virt":
@@ -218,12 +216,14 @@ def setup_qemu_base_target(target_chip: str, image_elf: Path, uart_sock: Path) -
             "-cpu", "pentium3",
             "-m", "128M",
             "-display", "none",
-            "-serial", f"unix:{uart_sock},server=on,wait=on",
+            "-serial", f"unix:{uart_sock[0]},server=on,wait=on",
             "-kernel", str(image_elf),
         ]
     else:
         print(f"\033[91m[Monitor] Fatal: Unsupported architecture/CPU pairing specified\033[0m")
         sys.exit(1)
+    if len(uart_sock) > 1:
+        qemu_args.extend(["-serial", f"unix:{uart_sock[1]},server=on,wait={'on' if wait else 'off'}"])
     return qemu_bin, qemu_args
 
 def setup_pci_bridge(qemu_args: list[str], enable_net: bool, run_sniffer: bool, debug: bool) -> tuple[any, any, any]:
@@ -265,11 +265,11 @@ def setup_pci_bridge(qemu_args: list[str], enable_net: bool, run_sniffer: bool, 
 
     return bridge_proc, sniffer_proc, bridge_image
 
-def setup_qemu_env(args, session_id: str, image_elf: Path, uart_sock: Path, enable_net: bool) -> tuple:
+def setup_qemu_env(args, session_id: str, image_elf: Path, uart_sock: list[Path], enable_net: bool, wait: bool) -> tuple:
     """Configure QEMU environment."""
-    qemu_bin, qemu_args = setup_qemu_base_target(args.chip, image_elf, uart_sock)
+    qemu_bin, qemu_args = setup_qemu_base_target(args.chip, image_elf, uart_sock, wait)
 
-    if args.chip == "x86-virt" and pci_build_status(args.chip):
+    if args.chip == "x86-virt" and build_status(args.chip, "ENABLE_PCI"):
         bridge_proc, sniffer_proc, bridge_image = setup_pci_bridge(
             qemu_args=qemu_args,
             enable_net=enable_net,
@@ -314,13 +314,11 @@ def start_gdb(args, gdb_arch, gdb_sock, gdb_target, target_image, session_id):
 def parse_arguments(arm_chips, riscv_chips, enable_dbg, enable_net):
     parser = argparse.ArgumentParser(description="Simulation Framework Monitor")
     parser.add_argument(
-        "--build",
-        action="store_true",
+        "--build", action="store_true",
         help="Build target chip firmware before launch. Select --chip to build its firmware."
     )
     parser.add_argument(
-        "--only",
-        action="store_true",
+        "--only", action="store_true",
         help="Build target chip firmware only and exit. Requires --build flag."
     )
     parser.add_argument(
@@ -329,7 +327,7 @@ def parse_arguments(arm_chips, riscv_chips, enable_dbg, enable_net):
     )
     parser.add_argument(
         "--opt",
-        help='Build options for target chip firmware. Requires --build flag. Example: --opt="-DENABLE_SECURE=True" for --chip cortex-m33'
+        help='Build options for target chip firmware. Requires --build flag. Example: --opt="-DRTOS=OFF"'
     )
     chips = arm_chips + riscv_chips + ["x86-virt", "x86_64"]
     parser.add_argument(
@@ -350,6 +348,10 @@ def parse_arguments(arm_chips, riscv_chips, enable_dbg, enable_net):
             "--sniffer", action="store_true",
             help="Launch packet sniffer to capture QEMU vfio-user traffic, requires --chip=x86-virt"
         )
+    parser.add_argument(
+        "--wait", action="store_true",
+        help='Wait for remote. Requires build with --opt="-DENABLE_BLE=True"'
+    )
     args = parser.parse_args()
     return args
 
@@ -411,9 +413,15 @@ def main():
         fatal_exit(f"Firmware file not found: {target_image} Run compilation first.", help=True)
     print(f"\033[94m[Monitor] Target firmware located at:\033[0m {target_image}")
 
+    wait = args.wait
     gdb_sock = Path(f"/tmp/gdb_{session_id}.sock")
-    uart_sock = Path(f"/tmp/uart_{session_id}.sock")
-    qemu_bin, qemu_args, bridge_proc, sniffer_proc, bridge_image = setup_qemu_env(args, session_id, image_elf, uart_sock, enable_net)
+    uart_sock = [Path(f"/tmp/uart1_{session_id}.sock")]
+
+    if build_status(args.chip, "ENABLE_BLE"):
+        uart_sock.append(Path(f"/tmp/uart2_{session_id}.sock"))
+        if enable_dbg and args.debug:
+            wait = False
+    qemu_bin, qemu_args, bridge_proc, sniffer_proc, bridge_image = setup_qemu_env(args, session_id, image_elf, uart_sock, enable_net, wait)
 
     if enable_dbg and args.debug:
         qemu_args.extend(["-gdb", f"unix:{gdb_sock},server=on,wait=off", "-S"])
@@ -456,7 +464,7 @@ def main():
         print("\033[92m[Monitor] Spawning Terminal for Serial (socat) Console...\033[0m")
         socat_cmd = [
             "xterm", "-hold", "-title", f"Session {session_id} UART Console {arch}/{args.chip}",
-            "-e", "socat", f"-,rawer", f"unix-connect:{uart_sock}"
+            "-e", "socat", f"-,rawer", f"unix-connect:{uart_sock[0]}"
         ]
         socat_proc = subprocess.Popen(socat_cmd, env=current_env)
         time.sleep(0.5) # Let socat connect and unblock QEMU
@@ -508,10 +516,11 @@ def main():
         print("\r\033[K", end="")
         print("\r\033[96m[Monitor] Tearing down infrastructure...\033[0m")
 
-        try:
-            uart_sock.unlink(missing_ok=True)
-        except Exception:
-            pass
+        for sock in uart_sock:
+            try:
+                sock.unlink(missing_ok=True)
+            except Exception:
+                pass
 
         if sniffer_proc:
             print("[Monitor] Tearing down vfio-user packet sniffer")

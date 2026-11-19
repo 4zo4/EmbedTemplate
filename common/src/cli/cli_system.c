@@ -24,6 +24,8 @@
 void clear_msg(void);
 void set_msg(const char *msg);
 void print_msg(EmbeddedCli *cli);
+void ble_start(void);
+void ble_suspend(void);
 void pci_start(void);
 void pci_suspend(void);
 void pci_test_start(void);
@@ -161,6 +163,9 @@ void show_main_sys_menu(EmbeddedCli *cli)
         "\rSystem Commands:\r\n"
         " set - Set log level\r\n"
         " show - Show status\r\n"
+#if defined(ENABLE_RTOS) && defined(BARE_METAL) && defined(ENABLE_BLE)
+        " ble - BLE Host\r\n"
+#endif
 #if defined(ENABLE_RTOS) && defined(ENABLE_SIM)
         " sim - HW Simulation Control\r\n"
 #endif
@@ -308,6 +313,20 @@ void on_stop_pci(EmbeddedCli *cli, char *args, void *context)
 #endif
 }
 
+void on_start_ble(EmbeddedCli *cli, char *args, void *context)
+{
+#if defined(ENABLE_RTOS) && defined(BARE_METAL) && defined(ENABLE_BLE)
+    ble_start();
+#endif
+}
+
+void on_stop_ble(EmbeddedCli *cli, char *args, void *context)
+{
+#if defined(ENABLE_RTOS) && defined(BARE_METAL) && defined(ENABLE_BLE)
+    ble_suspend();
+#endif
+}
+
 // show command
 
 void show_stats_sys(EmbeddedCli *cli, char *args, int count)
@@ -380,12 +399,12 @@ void show_version(EmbeddedCli *cli, char *args, int count)
 
 void show_config(EmbeddedCli *cli, char *args, int count)
 {
-    char msg[128] = "Config:\r\n";
-    uint16_t bindings_count = embeddedCliGetBindingsCount(cli);
-    uint16_t bindings_size = bindings_count * sizeof(CliCommandBinding);
+    char               msg[128] = "Config:\r\n";
+    uint16_t           bindings_count = embeddedCliGetBindingsCount(cli);
+    uint16_t           bindings_size = bindings_count * sizeof(CliCommandBinding);
     EmbeddedCliConfig *config = embeddedCliGetConfig();
-    uint16_t allocated_size = embeddedCliRequiredSize(config);
-    uint16_t max_bindings_count = config->maxBindingsCount;
+    uint16_t           allocated_size = embeddedCliRequiredSize(config);
+    uint16_t           max_bindings_count = config->maxBindingsCount;
     config->maxBindingsCount = bindings_count;
     uint16_t required_size = embeddedCliRequiredSize(config);
     config->maxBindingsCount = max_bindings_count;
@@ -1616,4 +1635,22 @@ void set_system_commands(EmbeddedCli *cli)
     );
     pci_ctx[0] = bid;
 #endif // ENABLE_PCI
+#if defined(ENABLE_RTOS) && defined(BARE_METAL) && defined(ENABLE_BLE)
+    embeddedCliAddBinding(
+        cli,
+        (CliCommandBinding){
+            .name = "ble",
+            .flags = BINDING_FLAG_WIDE,
+            .binding = on_start_ble, // start ble
+        }
+    );
+    bid = embeddedCliAddBinding(
+        cli,
+        (CliCommandBinding){
+            .name = "down",
+            .flags = BINDING_FLAG_WIDE,
+            .binding = on_stop_ble, // stop ble
+        }
+    );
+#endif // ENABLE_BLE
 }

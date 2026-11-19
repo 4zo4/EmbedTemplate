@@ -291,6 +291,8 @@ const char *entity_name(uint8_t entity, bool cap)
         return cap ? "TIMER" : "timer";
     case ENTITY_UART:
         return cap ? "UART" : "uart";
+    case ENTITY_BLE:
+        return cap ? "BLE" : "ble";
     default:
         return "";
     }

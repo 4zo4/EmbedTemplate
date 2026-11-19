@@ -20,6 +20,7 @@ int  cli_init(void **cli_ctx);
 bool cli_run(void *cli_ctx);
 void cli_exit(void *cli_ctx);
 
+int create_ble_task(void);
 int create_pci_task(void);
 int create_sim_tasks(void);
 
@@ -124,6 +125,7 @@ int main(void)
     // create system entities tasks
     create_sim_tasks();
     create_pci_task();
+    create_ble_task();
 
 #ifndef BARE_METAL
     sigset_t set;

@@ -1,4 +1,7 @@
+#include <stdarg.h>
+#include <stddef.h>
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 
 #ifndef BARE_METAL
@@ -29,3 +32,43 @@ int atoi(const char *s)
     }
     return num;
 }
+
+#ifdef BARE_METAL
+
+char *strcpy(char *dst, const char *src)
+{
+    size_t len = strlen(src) + 1;
+    return memcpy(dst, src, len);
+}
+
+char *strcat(char *dst, const char *src)
+{
+    strcpy(dst + strlen(dst), src);
+    return dst;
+}
+
+char *strncat(char *dst, const char *src, size_t n)
+{
+    char  *d = dst + strlen(dst);
+    size_t i = 0;
+
+    while (i < n && src[i] != '\0') {
+        d[i] = src[i];
+        i++;
+    }
+    d[i] = '\0';
+    return dst;
+}
+
+int sprintf(char *buf, const char *fmt, ...)
+{
+    va_list args;
+    int     n;
+
+    va_start(args, fmt);
+    n = vsnprintf(buf, (size_t)0x7fffffff, fmt, args);
+    va_end(args);
+    return n;
+}
+
+#endif
