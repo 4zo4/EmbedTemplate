@@ -8,14 +8,10 @@ set(TFA_LIBC_INC_DIR ${TFA_DIR}/include/lib/libc)
 set(MOCK_LIBC_SRC_DIR ${THIS_DIR}/src/lib/libc)
 set(MOCK_LIBC_INC_DIR ${THIS_DIR}/include/lib/libc)
 set(ARCH_INC_DIR ${THIS_DIR}/include/arch)
-set(DRV_INC_DIR ${THIS_DIR}/../src/drivers/include)
-set(REGS_INC_DIR ${DRV_INC_DIR}/regs)
 set(LOG_INC_DIRS
     ${THIS_DIR}/include
     ${THIS_DIR}/include/diagnostic/logging
 )
-set(CLI_INC_DIR ${THIS_DIR}/include/cli)
-set(TEST_INC_DIR ${THIS_DIR}/include/tests)
 
 set(TFA_LIBC_SOURCES
     ${TFA_LIBC_SRC_DIR}/printf.c
@@ -109,61 +105,7 @@ if(RTOS)
 endif()
 
 # --- CLI (cli_lib) ---
-set(TARGET_CLI_INC_DIRS
-    ${THIS_DIR}/include
-    ${THIS_DIR}/include/diagnostic/profiler
-    ${ARCH_INC_DIR}
-    ${CLI_INC_DIR}
-    ${DRV_INC_DIR}
-    ${LOG_INC_DIRS}
-    ${THIRD_PARTY_CLI_LIB_INC_DIR}
-)
-if(CLI)
-# full CLI
-set(CLI_SOURCES
-    ${THIS_DIR}/src/cli/cli_main.c
-    ${THIS_DIR}/src/cli/cli_system.c
-)
-add_library(cli_lib OBJECT ${CLI_SOURCES})
-if(TEST)
-    list(APPEND TARGET_CLI_INC_DIRS ${TEST_INC_DIR})
-    target_sources(cli_lib PRIVATE ${THIS_DIR}/src/cli/cli_test.c)
-    target_compile_definitions(cli_lib PRIVATE ENABLE_TEST)
-else()
-    target_sources(cli_lib PRIVATE ${THIS_DIR}/src/cli/cli_no_test.c)
-endif()
-if(RTOS)
-    target_compile_definitions(cli_lib PRIVATE ENABLE_RTOS)
-else()
-    target_sources(cli_lib PRIVATE ${THIS_DIR}/src/cli/cli_no_sim.c)
-endif()
-if(ENABLE_SIM)
-    target_compile_definitions(cli_lib PRIVATE ENABLE_SIM)
-endif()
-if(ENABLE_PROF)
-    target_compile_definitions(cli_lib PRIVATE ENABLE_PROF)
-endif()
-# CLI uses embedded cli lib
-target_link_libraries(cli_lib PUBLIC embedded_cli_lib)
-else()
-# minimal CLI
-set(CLI_SOURCES
-    ${THIS_DIR}/src/cli/cli_mini.c
-)
-add_library(cli_lib OBJECT ${CLI_SOURCES})
-endif()
-if(BARE_METAL)
-    target_compile_definitions(cli_lib PRIVATE BARE_METAL)
-    if(ENABLE_BLE)
-        target_compile_definitions(cli_lib PRIVATE ENABLE_BLE)
-    endif() # ENABLE_BLE
-    if(ENABLE_PCI)
-        target_compile_definitions(cli_lib PRIVATE ENABLE_PCI)
-    endif() # ENABLE_PCI
-endif() # BARE_METAL
-target_include_directories(cli_lib BEFORE PRIVATE ${MOCK_LIBC_INC_DIR})
-target_include_directories(cli_lib PRIVATE ${TARGET_CLI_INC_DIRS})
-target_compile_options(cli_lib PRIVATE -ffreestanding -fno-builtin ${OFLAGS})
+add_subdirectory(src/cli)
 
 # --- Infrastructure (infra_lib) ---
 set(INFRA_SOURCES

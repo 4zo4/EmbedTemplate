@@ -15,7 +15,6 @@
 #include "arch_ops.h"
 #include "block_id.h"
 #include "cli.h"
-#define EMBEDDED_CLI_IMPL
 #include "embedded_cli.h"
 #include "log.h"
 #include "log_marker.h"

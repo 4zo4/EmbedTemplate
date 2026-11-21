@@ -209,7 +209,7 @@ void init_apic(void)
     outb(0x23, 0x01); // Force NMI and INTR signals to flow through the APIC
 
     uint8_t irq_id[] = {UART1_IRQ_ID, UART2_IRQ_ID};
-    for (int i = 0, i < sizeof(irq_id) / sizeof(irq_id[0]); i++) {
+    for (size_t i = 0; i < sizeof(irq_id) / sizeof(irq_id[0]); i++) {
         uint8_t ioapic_uart_irq = IOAPICIRQTBL(irq_id[i]);
         ioapic_write(ioapic_uart_irq + 1, 0x00000000); // High 32-bits (Destination: APIC ID 0)
 #ifdef ENABLE_LEVEL_TRIGGERED

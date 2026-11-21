@@ -37,7 +37,9 @@ option(CLI "Full CLI enabled" ON)
 option(RTOS "Rtos enabled" ON)
 option(TEST "Test enabled" ON)
 
+if(RTOS)
 set(ENABLE_SIM TRUE CACHE BOOL "Simulation enabled")
+endif()
 
 # --- Generator of C include files for Hardware Registers ---
 set(RDL_SRC_DIR "${CMAKE_SOURCE_DIR}/hw/rdl")
