@@ -111,6 +111,7 @@ void ioapic_eoi(uint32_t vector_id);
 #define configUSE_QUEUE_SETS 0
 #define configUSE_TIME_SLICING 1
 #define configUSE_NEWLIB_REENTRANT 0
+#define configUSE_STREAM_BUFFERS 1
 
 /* Memory Management */
 #define configSUPPORT_DYNAMIC_ALLOCATION 0

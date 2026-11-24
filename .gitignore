@@ -23,6 +23,7 @@ third_party/bsp/tf-a
 third_party/os/freertos
 !third_party/os/.gitkeep
 third_party/net/nimble
+third_party/net/coremqtt
 tools/peakrdl
 
 # IDE Configurations

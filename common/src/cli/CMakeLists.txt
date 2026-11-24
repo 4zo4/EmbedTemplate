@@ -67,9 +67,9 @@ endif() # CLI
 
 if(BARE_METAL)
     target_compile_definitions(cli_lib PRIVATE BARE_METAL)
-    if(RTOS AND ENABLE_BLE)
+    if(RTOS AND ENABLE_NET)
         target_compile_definitions(cli_lib PRIVATE ENABLE_BLE)
-    endif() # ENABLE_BLE
+    endif() # ENABLE_NET
     if(ENABLE_PCI)
         target_compile_definitions(cli_lib PRIVATE ENABLE_PCI)
     endif() # ENABLE_PCI

@@ -36,6 +36,7 @@ typedef enum {
 #define ENT_TIMER "\x07"
 #define ENT_UART "\x08"
 #define ENT_BLE "\x09"
+#define ENT_MQTT "\x0a"
 
 // Entity IDs
 typedef enum {
@@ -49,6 +50,7 @@ typedef enum {
     ENTITY_TIMER,
     ENTITY_UART,
     ENTITY_BLE,
+    ENTITY_MQTT,
     MAX_ENTITY
 } entity_e;
 

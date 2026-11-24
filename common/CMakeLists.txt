@@ -84,6 +84,7 @@ if(RTOS)
         ${FREERTOS_DIR}/queue.c
         ${FREERTOS_DIR}/timers.c
         ${FREERTOS_DIR}/event_groups.c
+        ${FREERTOS_DIR}/stream_buffer.c
     )
     add_library(freertos_lib OBJECT ${FREERTOS_SOURCES} ${FREERTOS_PORT_SOURCES} ${FREERTOS_MOCK_SOURCES})
     target_include_directories(freertos_lib PRIVATE
@@ -117,7 +118,7 @@ set(INFRA_INC_DIRS
     ${ARCH_INC_DIR}
     ${LOG_INC_DIRS}
 )
-if(RTOS AND ENABLE_BLE)
+if(RTOS AND ENABLE_NET)
     list(APPEND INFRA_SOURCES "${THIS_DIR}/src/net/nimble/hal/hal_uart.c")
 endif()
 add_library(infra_lib OBJECT ${INFRA_SOURCES})

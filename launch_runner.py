@@ -314,15 +314,15 @@ def start_gdb(args, gdb_arch, gdb_sock, gdb_target, target_image, session_id):
 def parse_arguments(arm_chips, riscv_chips, enable_dbg, enable_net):
     parser = argparse.ArgumentParser(description="Simulation Framework Monitor")
     parser.add_argument(
-        "--build", action="store_true",
+        "-b", "--build", action="store_true",
         help="Build target chip firmware before launch. Select --chip to build its firmware."
     )
     parser.add_argument(
-        "--only", action="store_true",
+        "-o", "--only", action="store_true",
         help="Build target chip firmware only and exit. Requires --build flag."
     )
     parser.add_argument(
-        "--verbose", action="store_true",
+        "-v", "--verbose", action="store_true",
         help="Enable verbose build output. Requires --build flag."
     )
     parser.add_argument(
@@ -345,12 +345,12 @@ def parse_arguments(arm_chips, riscv_chips, enable_dbg, enable_net):
         )
     if enable_net:
         parser.add_argument(
-            "--sniffer", action="store_true",
+            "-s", "--sniffer", action="store_true",
             help="Launch packet sniffer to capture QEMU vfio-user traffic, requires --chip=x86-virt"
         )
     parser.add_argument(
-        "--wait", action="store_true",
-        help='Wait for remote. Requires build with --opt="-DENABLE_BLE=True"'
+        "-w", "--wait", action="store_true",
+        help='Wait for remote. Requires build with --opt="-DENABLE_NET=True"'
     )
     args = parser.parse_args()
     return args
@@ -417,7 +417,7 @@ def main():
     gdb_sock = Path(f"/tmp/gdb_{session_id}.sock")
     uart_sock = [Path(f"/tmp/uart1_{session_id}.sock")]
 
-    if build_status(args.chip, "ENABLE_BLE"):
+    if build_status(args.chip, "ENABLE_NET"):
         uart_sock.append(Path(f"/tmp/uart2_{session_id}.sock"))
         if enable_dbg and args.debug:
             wait = False

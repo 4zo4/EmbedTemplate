@@ -292,6 +292,8 @@ const char *entity_name(uint8_t entity, bool cap)
         return cap ? "UART" : "uart";
     case ENTITY_BLE:
         return cap ? "BLE" : "ble";
+    case ENTITY_MQTT:
+        return cap ? "MQTT" : "mqtt";
     default:
         return "";
     }

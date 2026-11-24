@@ -13,7 +13,7 @@ if(RTOS)
         ${CMAKE_CURRENT_SOURCE_DIR}/freertos_main.c
         ${CMAKE_CURRENT_SOURCE_DIR}/freertos_pci.c
         ${CMAKE_CURRENT_SOURCE_DIR}/freertos_sim.c
-        ${CMAKE_CURRENT_SOURCE_DIR}/freertos_ble.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/freertos_net.c
     )
     if(BARE_METAL)
         # The path to the FreeRTOS port sources is defined by the FREERTOS_PORT variable in port/<arch>/<chip>/CMakeLists.txt
@@ -73,9 +73,10 @@ endif()
 if(CLI)
     set(EMBEDDED_CLI_LIB embedded_cli_lib)
 endif()
-if(RTOS AND ENABLE_BLE)
+if(RTOS AND ENABLE_NET)
     set(NIMBLE_LIB nimble_lib)
-    target_compile_definitions(runner PRIVATE ENABLE_BLE)
+    set(COREMQTT_LIB coremqtt_lib)
+    target_compile_definitions(runner PRIVATE ENABLE_NET)
     target_link_options(runner PRIVATE -Wl,--wrap=realloc -Wl,--wrap=malloc -Wl,--wrap=free)
 endif()
 
@@ -90,6 +91,7 @@ target_link_libraries(runner PRIVATE
     ${EMBEDDED_CLI_LIB}
     tfa_libc_lib   # TF-A libc
     ${NIMBLE_LIB}
+    ${COREMQTT_LIB}
     ${EXTRA_LIBS}
 )
 

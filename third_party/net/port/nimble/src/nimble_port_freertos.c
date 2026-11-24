@@ -1,13 +1,12 @@
 #include <stddef.h>
 #include <stdio.h>
 
-#include "nimble/nimble_port.h"
-#include "nimble/nimble_port_freertos.h"
 #include "host/ble_hs.h"
 #include "host/util/util.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 #include "store/config/ble_store_config.h"
+#include "nimble/nimble_port.h"
 
 #if defined(NIMBLE_CFG_CONTROLLER) && (NIMBLE_CFG_CONTROLLER == 1)
 #error "NIMBLE_CFG_CONTROLLER unsupported"
@@ -25,6 +24,7 @@ static const void *nimble_gatts_svc_defs_buf[NIMBLE_MAX_SVC_DEF_TABLES];
 static size_t nimble_heap_off = 0;
 static uint32_t free_count = 0;
 static uint8_t own_addr_type = NIMBLE_ADDR_TYPE_INVALID;
+static ble_gap_event_fn *app_gap_event_cb = NULL;
 
 void *
 __wrap_malloc(size_t size)
@@ -63,6 +63,9 @@ __wrap_realloc(void *ptr, size_t new_size)
 static int
 ble_gap_event_cb(struct ble_gap_event *event, void *arg)
 {
+    if (app_gap_event_cb)
+        app_gap_event_cb(event, arg);
+
     switch (event->type) {
     case BLE_GAP_EVENT_CONNECT:
         BLE_HS_LOG(INFO, "GAP connect: status=%d handle=%u",
@@ -163,9 +166,8 @@ ble_on_reset(int reason)
 }
 
 void
-nimble_port_freertos_init(TaskFunction_t host_task_fn)
+nimble_host_init(void)
 {
-    (void)host_task_fn;
     nimble_port_init();
 
     ble_hs_cfg.sync_cb = ble_on_sync;
@@ -176,5 +178,38 @@ nimble_port_freertos_init(TaskFunction_t host_task_fn)
     ble_svc_gap_init();
     ble_svc_gatt_init();
 
-    ble_svc_gap_device_name_set("purpleGap");
+    ble_svc_gap_device_name_set("nimbleGap");
+}
+
+int
+nimble_host_add_gatt_svcs(const struct ble_gatt_svc_def *svcs,
+                          ble_gap_event_fn *gap_cb,
+                          const char *dev_name)
+{
+    int rc;
+
+    if (gap_cb) {
+        app_gap_event_cb = gap_cb;
+    }
+
+    if (dev_name) {
+        rc = ble_svc_gap_device_name_set(dev_name);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+
+    if (svcs) {
+        rc = ble_gatts_count_cfg(svcs);
+        if (rc != 0) {
+            return rc;
+        }
+
+        rc = ble_gatts_add_svcs(svcs);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+
+    return 0;
 }
