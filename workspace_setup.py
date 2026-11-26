@@ -164,6 +164,90 @@ def uninstall_pip_package(package_name):
             return False
     return True
 
+def align_git_identity(repo_path, branch=None):
+    """
+    Check if git user.email and user.name are configured.
+    If missing, set a local identity for the repository.
+    """
+    if not branch:
+        return
+
+    email_check = subprocess.run(
+        ["git", "-C", repo_path, "config", "user.email"],
+        capture_output=True, text=True
+    )
+
+    name_check = subprocess.run(
+        ["git", "-C", repo_path, "config", "user.name"],
+        capture_output=True, text=True
+    )
+
+    if email_check.returncode != 0 or not email_check.stdout.strip():
+        subprocess.run(
+            ["git", "-C", repo_path, "config", "--local", "user.email", "purple@purple.ca"],
+            check=True
+        )
+
+    if name_check.returncode != 0 or not name_check.stdout.strip():
+        subprocess.run(
+            ["git", "-C", repo_path, "config", "--local", "user.name", "Purple"],
+            check=True
+        )
+
+    if (name_check.returncode != 0 or not name_check.stdout.strip() or
+        email_check.returncode != 0 or not email_check.stdout.strip()):
+        print("[🌲 Git] user.name and/or user.email were missing. Configured local fallback...")
+
+def apply_patch(repo_path, patch_path, tag=None, branch=None, copy_files=None, project_root=None):
+    """Safely and atomically applies a patch and copies custom files to a branch or tag."""
+    if not patch_path and not copy_files:
+        return True
+
+    target_ref = f"branch '{branch}'" if branch else f"tag '{tag}'"
+
+    try:
+        if patch_path:
+            if not os.path.exists(patch_path):
+                print(f"[⚠️] Warning: Patch file missing on host filesystem: {patch_path}")
+                return False
+
+            patch_filename = os.path.basename(patch_path)
+            dry_run = subprocess.run(
+                ["git", "apply", "--check", patch_path],
+                cwd=repo_path, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            if dry_run.returncode != 0:
+                print(f"[⚠️] Warning: Dropped patch conflict: {dry_run.stderr.decode().strip()}")
+                return False
+
+            subprocess.run(["git", "apply", patch_path], cwd=repo_path, check=True)
+            print(f"[✓ Patch] '{patch_filename}' applied to {target_ref}")
+
+        for entry in (copy_files or []):
+            src = os.path.join(project_root, entry["src"]) if project_root else entry["src"]
+            dst = os.path.join(repo_path, entry["dst"])
+            if not os.path.exists(src):
+                print(f"[⚠️] Warning: Copy source missing on host filesystem: {src}")
+                return False
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copy2(src, dst)
+            print(f"[✓ Copy] '{entry['src']}' -> '{entry['dst']}'")
+
+        if branch:
+            subprocess.run(["git", "add", "."], cwd=repo_path, check=True)
+            subprocess.run(
+                ["git", "commit", "-m", f"feat: apply {os.path.basename(patch_path or 'custom files')}"],
+                cwd=repo_path, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+            print(f"[✓ Git] Committed changes to branch {branch}")
+
+        return True
+
+    except subprocess.CalledProcessError as e:
+        print(f"[⚠️] Failed to execute patch orchestration task: {e}")
+        return False
+
+
 def get_qemu_dirs():
     """Scan the system paths and return a list of directories containing QEMU binaries."""
     qemu_dirs = []
@@ -261,7 +345,7 @@ def get_qemu_system_x86_64_version():
         return None
 
 def is_qemu_vfio_user_supported(tag = None):
-    """Verify if the local qemu-system-x86_64 supports vfio-user-pci and matches the required version tag."""
+    """Verify if the local qemu-system-x86_64 supports vfio-user-pci & mmio-user, and matches the required version tag."""
     if not shutil.which("qemu-system-x86_64"):
         print("[⚠️] qemu-system-x86_64 not found")
         return False
@@ -275,6 +359,9 @@ def is_qemu_vfio_user_supported(tag = None):
 
         stdout_stream, _ = qemu_device_help.communicate()
 
+        if "mmio-user" not in stdout_stream:
+            print("[⚠️] mmio-user not supported in qemu-system-x86_64")
+            return False
         if "vfio-user-pci" not in stdout_stream:
             print("[⚠️] vfio-user-pci not supported in qemu-system-x86_64")
             return False
@@ -384,13 +471,26 @@ def verify_symlinks(project_root_dir, tools_dir, bsp_dir, os_dir, selected_ids):
             else:
                 print(f"[⚠️] Warning: Cannot generate symbolic link. Target directory missing at: {target_path}")
 
-def align_repo_state(repo_path, tag = None, branch = None):
+def align_repo_state(repo_path, tag = None, branch = None, patch_path=None, copy_files=None, project_root=None):
     """Align git workspace targets using low-level plumbing checks, avoiding blind checkouts."""
     if not tag and not branch:
         return
     try:
         status_check = subprocess.run(["git", "status", "--porcelain"], cwd=repo_path, stdout=subprocess.PIPE, text=True)
         is_dirty = bool(status_check.stdout.strip())
+
+        def patch_repo(repo_path, patch_path, tag, branch, copy_files, project_root):
+            align_git_identity(repo_path, branch)
+            if tag and branch:
+                target_desc = f"branch '{branch}' (at tag '{tag}')"
+            elif branch:
+                target_desc = f"branch '{branch}'"
+            else:
+                target_desc = f"tag '{tag}'"
+
+            print(f"[🌲 Git] Patching '{repo_path}' {target_desc} from patch '{patch_path}'...")
+
+            apply_patch(repo_path, patch_path, tag, branch, copy_files, project_root)
 
         def run_checkout(branch):
             if is_dirty:
@@ -406,6 +506,8 @@ def align_repo_state(repo_path, tag = None, branch = None):
                 return
             print(f"[🌲 Git] Switching '{repo_path}' to branch '{branch}'")
             run_checkout(branch)
+            if patch_path:
+                patch_repo(repo_path, patch_path, tag, branch, copy_files, project_root)
             return
 
         if tag and not branch:
@@ -422,12 +524,20 @@ def align_repo_state(repo_path, tag = None, branch = None):
 
                 if current_head_hash == target_tag_hash:
                     print(f"[✓ Git] '{repo_path}' aligned on tag '{tag}'")
+                    if patch_path:
+                        subprocess.run(["git", "checkout", "--force", f"refs/tags/{tag}"],
+                                       cwd=repo_path, stdout=subprocess.PIPE, text=True, check=True).stdout.strip()
+                        subprocess.run(["git", "clean", "-fd"],
+                                       cwd=repo_path, stdout=subprocess.PIPE, text=True, check=True).stdout.strip()
+                        patch_repo(repo_path, patch_path, tag, branch, copy_files, project_root)
                     return
             except subprocess.CalledProcessError:
                 pass
 
             print(f"[🌲 Git] Switching '{repo_path}' to tag '{tag}'...")
             run_checkout(tag)
+            if patch_path:
+                patch_repo(repo_path, patch_path, tag, branch, copy_files, project_root)
             return
 
         if tag and branch:
@@ -460,6 +570,9 @@ def align_repo_state(repo_path, tag = None, branch = None):
                                cwd=repo_path, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except subprocess.CalledProcessError as e:
                 print(f"[⚠️] Error: Failed to checkout '{branch}': {e}")
+
+            if patch_path:
+                patch_repo(repo_path, patch_path, tag, branch, copy_files, project_root)
 
             if is_dirty:
                 subprocess.run(["git", "stash", "pop"], cwd=repo_path, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -497,7 +610,7 @@ def build_repo(repo_name, repo_path, tag = None):
             "--enable-kvm",
             "--enable-slirp",
             "--disable-user",
-            "--extra-cflags=-g -O2",
+            #"--extra-cflags=-g -O2",
             "--target-list="
             "i386-softmmu,x86_64-softmmu,"      # x86_32 & x86_64 bare-metal emulation
             "arm-softmmu,aarch64-softmmu,"      # arm32 & arm64 bare-metal emulation
@@ -878,6 +991,8 @@ def main():
             r_depth = r_entry.get("clone_depth")
             r_url = r_entry.get("upstream_url")
             r_sparse = r_entry.get("sparse")
+            r_patch = r_entry.get("patch")
+            r_copy = r_entry.get("copy")
 
             if r_id and r_id not in selected_ids:
                 repo_ids.append(r_id)
@@ -890,7 +1005,9 @@ def main():
                 "branch": r_branch, # optional branch reference to align the repository to
                 "depth": r_depth,   # optional clone depth for shallow clones (if specified)
                 "url": r_url,       # optional upstream URL for the repository (if specified, overrides default GitHub URL)
-                "sparse": r_sparse  # optional sparse checkout
+                "sparse": r_sparse, # optional sparse checkout
+                "patch": r_patch,   # optional source patch
+                "copy": r_copy      # optional copy files
             }
     add_repos(repos)
 
@@ -917,7 +1034,9 @@ def main():
                 "branch": r_info["branch"],
                 "depth": r_info["depth"],
                 "url": r_info["url"],
-                "sparse": r_info["sparse"]
+                "sparse": r_info["sparse"],
+                "patch": r_info["patch"],
+                "copy": r_info["copy"]
             }
             for r_slug, r_info in sorted(final_repos.items())
         ],
@@ -992,7 +1111,16 @@ def main():
             if repo_sparse:
                 subprocess.run(["git", "sparse-checkout", "set"] + repo_sparse, cwd=repo_path, check=True)
 
-        align_repo_state(repo_path, tag=tag, branch=branch)
+        tag = repo_entry.get("tag")
+        branch = repo_entry.get("branch")
+        patch_path = repo_entry.get("patch")
+        copy_files = repo_entry.get("copy")
+        if patch_path:
+            patch_path = os.path.abspath(os.path.join(project_root_dir, patch_path))
+            if not os.path.exists(patch_path):
+                print(f"[⚠️] Warning: Patch file '{patch_path}' does not exist. Skipping patch application.")
+                patch_path = None
+        align_repo_state(repo_path, tag=tag, branch=branch, patch_path=patch_path, copy_files=copy_files, project_root=project_root_dir)
         build_repo(repo_name, repo_path, tag=tag)
 
     verify_symlinks(project_root_dir, resolved_tools_dir, resolved_bsp_dir, resolved_os_dir, selected_ids)

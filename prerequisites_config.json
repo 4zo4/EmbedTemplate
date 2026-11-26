@@ -33,7 +33,14 @@
       "xfonts-utils"
     ],
     "repos": [
-      { "slug": "qemu/qemu", "id": "qemu", "type": "tools", "tag": "v11.1.0", "clone_depth": 1 },
+      { "slug": "qemu/qemu", "id": "qemu", "type": "tools", "tag": "v11.1.0", "clone_depth": 1,
+        "patch": "tools/sim/qemu/mmio_user_patch.patch",
+        "copy": [
+          {
+            "src": "tools/sim/qemu/mmio_user.c",
+            "dst": "hw/misc/mmio_user.c"
+          }
+        ] },
       { "slug": "4zo4/FreeRTOS-Kernel", "id": "freertos", "dir": "freertos", "type": "os",
         "branch": "feature/embed_template_updates" },
       { "slug": "TF-A/trusted-firmware-a", "id": "tfa", "dir": "tf-a", "type": "bsp", "tag": "v2.15.0",

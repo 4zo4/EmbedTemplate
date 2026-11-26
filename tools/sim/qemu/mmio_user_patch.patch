@@ -1,0 +1,71 @@
+diff --git a/hw/arm/virt.c b/hw/arm/virt.c
+index 219597ca..35bfbc22 100644
+--- a/hw/arm/virt.c
++++ b/hw/arm/virt.c
+@@ -4168,6 +4168,7 @@ static void virt_machine_class_init(ObjectClass *oc, const void *data)
+      */
+     mc->max_cpus = 512;
+     machine_class_allow_dynamic_sysbus_dev(mc, TYPE_RAMFB_DEVICE);
++    machine_class_allow_dynamic_sysbus_dev(mc, "mmio-user");
+     machine_class_allow_dynamic_sysbus_dev(mc, TYPE_UEFI_VARS_SYSBUS);
+     machine_class_allow_dynamic_sysbus_dev(mc, TYPE_ARM_SMMUV3);
+     machine_class_allow_dynamic_sysbus_dev(mc, TYPE_WDT_SBSA);
+diff --git a/hw/core/sysbus-fdt.c b/hw/core/sysbus-fdt.c
+index 12238570..c49d31e6 100644
+--- a/hw/core/sysbus-fdt.c
++++ b/hw/core/sysbus-fdt.c
+@@ -140,6 +140,7 @@ static const BindingEntry bindings[] = {
+     /* No generic DT support for smmuv3 dev. Support added for arm virt only */
+     TYPE_BINDING(TYPE_ARM_SMMUV3, no_fdt_node),
+     TYPE_BINDING(TYPE_RAMFB_DEVICE, no_fdt_node),
++    TYPE_BINDING("mmio-user", no_fdt_node),
+     TYPE_BINDING(TYPE_UEFI_VARS_SYSBUS, add_uefi_vars_node),
+     TYPE_BINDING(TYPE_WDT_SBSA, no_fdt_node),
+     TYPE_BINDING("", NULL), /* last element */
+diff --git a/hw/i386/pc_q35.c b/hw/i386/pc_q35.c
+index 6c1e4eff..c2918a6b 100644
+--- a/hw/i386/pc_q35.c
++++ b/hw/i386/pc_q35.c
+@@ -354,6 +354,7 @@ static void pc_q35_machine_set_wdat(Object *o, bool value, Error **errp)
+ 
+ static void pc_q35_machine_options(MachineClass *m)
+ {
++    machine_class_allow_dynamic_sysbus_dev(m, "mmio-user");
+     PCMachineClass *pcmc = PC_MACHINE_CLASS(m);
+     ObjectClass *oc = OBJECT_CLASS(m);
+     pcmc->pci_root_uid = 0;
+diff --git a/hw/misc/Kconfig b/hw/misc/Kconfig
+index 1543ee66..f8a5c68a 100644
+--- a/hw/misc/Kconfig
++++ b/hw/misc/Kconfig
+@@ -258,3 +258,7 @@ config XLNX_ZYNQ_DDRC
+     bool
+ 
+ source macio/Kconfig
++
++config MMIO_USER
++    bool
++    default y
+diff --git a/hw/misc/meson.build b/hw/misc/meson.build
+index 23265f60..65243fea 100644
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -1,5 +1,6 @@
+ system_ss.add(when: 'CONFIG_APPLESMC', if_true: files('applesmc.c'))
+ system_ss.add(when: 'CONFIG_EDU', if_true: files('edu.c'))
++system_ss.add(when: 'CONFIG_MMIO_USER', if_true: files('mmio_user.c'))
+ system_ss.add(when: 'CONFIG_FW_CFG_DMA', if_true: files('vmcoreinfo.c'))
+ system_ss.add(when: 'CONFIG_ISA_DEBUG', if_true: files('debugexit.c'))
+ system_ss.add(when: 'CONFIG_ISA_TESTDEV', if_true: files('pc-testdev.c'))
+diff --git a/hw/riscv/virt.c b/hw/riscv/virt.c
+index 51bac47a..06404e4f 100644
+--- a/hw/riscv/virt.c
++++ b/hw/riscv/virt.c
+@@ -1739,6 +1739,7 @@ static void virt_machine_class_init(ObjectClass *oc, const void *data)
+     hc->plug = virt_machine_device_plug_cb;
+ 
+     machine_class_allow_dynamic_sysbus_dev(mc, TYPE_RAMFB_DEVICE);
++    machine_class_allow_dynamic_sysbus_dev(mc, "mmio-user");
+     machine_class_allow_dynamic_sysbus_dev(mc, TYPE_UEFI_VARS_SYSBUS);
+ #ifdef CONFIG_TPM
+     machine_class_allow_dynamic_sysbus_dev(mc, TYPE_TPM_TIS_SYSBUS);

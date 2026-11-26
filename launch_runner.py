@@ -7,6 +7,7 @@ import argparse
 import glob
 import json
 import os
+from dataclasses import dataclass, field
 from pathlib import Path
 import sys
 import time
@@ -22,6 +23,35 @@ from tools.net.vfio_user_pkt_sniffer import (
     start_vfio_user_pkt_sniffer,
     stop_vfio_user_pkt_sniffer,
 )
+
+@dataclass
+class SessionContext:
+    session_id: int
+    args: argparse.Namespace
+    image_elf: Path
+    enable_dbg: bool
+    enable_net: bool
+    wait: bool
+    gdb_sock: Path | None = field(init=False, default=None)
+    mmio_sock: Path | None = field(init=False, default=None)
+    uart_sock: list[Path] = field(init=False)
+
+    def __post_init__(self):
+        if self.enable_dbg and self.args.debug:
+            self.gdb_sock = Path(f"/tmp/gdb_{self.session_id}.sock")
+        if self.args.mmio:
+            self.mmio_sock = Path(f"/tmp/mmio_{self.session_id}.sock")
+        self.uart_sock = [Path(f"/tmp/uart1_{self.session_id}.sock")]
+        if build_status(self.args.chip, "ENABLE_NET"):
+            self.uart_sock.append(Path(f"/tmp/uart2_{self.session_id}.sock"))
+
+    def cleanup_sockets(self) -> None:
+        for sock in (*self.uart_sock, self.gdb_sock, self.mmio_sock):
+            if sock:
+                try:
+                    sock.unlink(missing_ok=True)
+                except Exception:
+                    pass
 
 def load_json(path):
     if not os.path.exists(path):
@@ -166,15 +196,17 @@ def start_pcie_cosim_bridge(debug=False):
 
     return bridge_proc, bridge_image
 
-def setup_qemu_base_target(target_chip: str, image_elf: Path, uart_sock: list[Path], wait: bool) -> tuple[str, list[str]]:
+def setup_qemu_base_target(ctx: SessionContext) -> tuple[str, list[str]]:
     """Return QEMU binary and arguments based on the target chip."""
+    target_chip = ctx.args.chip
+
     if target_chip == "stm32f4":
         qemu_bin = "qemu-system-arm"
         qemu_args = [
             "-M", "netduinoplus2",
             "-nographic",
-            "-serial", f"unix:{uart_sock[0]},server=on,wait=on",
-            "-kernel", str(image_elf),
+            "-serial", f"unix:{ctx.uart_sock[0]},server=on,wait=on",
+            "-kernel", str(ctx.image_elf),
         ]
     elif target_chip == "cortex-a9-virt":
         qemu_bin = "qemu-system-arm"
@@ -183,20 +215,20 @@ def setup_qemu_base_target(target_chip: str, image_elf: Path, uart_sock: list[Pa
             "-cpu", "cortex-a15",
             "-m", "128M",
             "-display", "none",
-            "-serial", f"unix:{uart_sock[0]},server=on,wait=on",
-            "-device", f"loader,file={image_elf},cpu-num=0",
+            "-serial", f"unix:{ctx.uart_sock[0]},server=on,wait=on",
+            "-device", f"loader,file={ctx.image_elf},cpu-num=0",
         ]
     elif target_chip == "cortex-m33":
         qemu_bin = "qemu-system-arm"
-        secure_boot_elf = image_elf.parent / "secure_boot.elf"
+        secure_boot_elf = ctx.image_elf.parent / "secure_boot.elf"
         qemu_args = [
             "-M", "mps2-an505",
             "-cpu", "cortex-m33",
             "-m", "16M",
             "-display", "none",
-            "-serial", f"unix:{uart_sock[0]},server=on,wait=on",
+            "-serial", f"unix:{ctx.uart_sock[0]},server=on,wait=on",
             "-device", f"loader,file={secure_boot_elf},cpu-num=0",
-            "-device", f"loader,file={image_elf}",
+            "-device", f"loader,file={ctx.image_elf}",
         ]
     elif target_chip == "gd32vf103-virt":
         qemu_bin = "qemu-system-riscv32"
@@ -206,8 +238,8 @@ def setup_qemu_base_target(target_chip: str, image_elf: Path, uart_sock: list[Pa
             "-m", "32M",
             "-display", "none",
             "-bios", "none",
-            "-serial", f"unix:{uart_sock[0]},server=on,wait=on",
-            "-device", f"loader,file={image_elf},cpu-num=0"
+            "-serial", f"unix:{ctx.uart_sock[0]},server=on,wait=on",
+            "-device", f"loader,file={ctx.image_elf},cpu-num=0",
         ]
     elif target_chip == "x86-virt":
         qemu_bin = "qemu-system-i386"
@@ -216,15 +248,26 @@ def setup_qemu_base_target(target_chip: str, image_elf: Path, uart_sock: list[Pa
             "-cpu", "pentium3",
             "-m", "128M",
             "-display", "none",
-            "-serial", f"unix:{uart_sock[0]},server=on,wait=on",
-            "-kernel", str(image_elf),
+            "-serial", f"unix:{ctx.uart_sock[0]},server=on,wait=on",
+            "-kernel", str(ctx.image_elf),
         ]
     else:
-        print(f"\033[91m[Monitor] Fatal: Unsupported architecture/CPU pairing specified\033[0m")
+        print("\033[91m[Monitor] Fatal: Unsupported architecture/CPU pairing specified\033[0m")
         sys.exit(1)
-    if len(uart_sock) > 1:
-        qemu_args.extend(["-serial", f"unix:{uart_sock[1]},server=on,wait={'on' if wait else 'off'}"])
+
+    if len(ctx.uart_sock) > 1:
+        qemu_args.extend([
+            "-serial", f"unix:{ctx.uart_sock[1]},server=on,wait={'on' if ctx.wait else 'off'}"
+        ])
+
+    if ctx.mmio_sock:
+        qemu_args.extend([
+            "-chardev", f"socket,id=mmio-cosim,path={ctx.mmio_sock},server=on,wait={'on' if ctx.wait else 'off'}",
+            "-device", "mmio-user,chardev=mmio-cosim,base=0x90000000,size=0x10000000",
+        ])
+
     return qemu_bin, qemu_args
+
 
 def setup_pci_bridge(qemu_args: list[str], enable_net: bool, run_sniffer: bool, debug: bool) -> tuple[any, any, any]:
     """Initialize PCIe co-simulation bridge and packet sniffing."""
@@ -265,16 +308,16 @@ def setup_pci_bridge(qemu_args: list[str], enable_net: bool, run_sniffer: bool, 
 
     return bridge_proc, sniffer_proc, bridge_image
 
-def setup_qemu_env(args, session_id: str, image_elf: Path, uart_sock: list[Path], enable_net: bool, wait: bool) -> tuple:
+def setup_qemu_env(ctx: SessionContext) -> tuple:
     """Configure QEMU environment."""
-    qemu_bin, qemu_args = setup_qemu_base_target(args.chip, image_elf, uart_sock, wait)
+    qemu_bin, qemu_args = setup_qemu_base_target(ctx)
 
-    if args.chip == "x86-virt" and build_status(args.chip, "ENABLE_PCI"):
+    if ctx.args.chip == "x86-virt" and build_status(ctx.args.chip, "ENABLE_PCI"):
         bridge_proc, sniffer_proc, bridge_image = setup_pci_bridge(
             qemu_args=qemu_args,
-            enable_net=enable_net,
-            run_sniffer=args.sniffer,
-            debug=args.bridge
+            enable_net=ctx.enable_net,
+            run_sniffer=ctx.args.sniffer,
+            debug=ctx.args.bridge
         )
     else:
         bridge_proc, sniffer_proc, bridge_image = None, None, None
@@ -336,21 +379,29 @@ def parse_arguments(arm_chips, riscv_chips, enable_dbg, enable_net):
     )
     if enable_dbg:
         parser.add_argument(
-            "--debug", action="store_true",
+            "-d", "--debug", action="store_true",
             help="Enable GDB server and stop guest CPU at startup"
         )
         parser.add_argument(
             "--bridge", action="store_true",
-            help="Enable GDB server and stop bridge at startup, requires --chip=x86-virt"
+            help="Enable GDB server and stop bridge at startup, requires --chip=x86-vir and --debug option"
         )
+    else:
+        parser.set_defaults(debug=False, bridge=False)
     if enable_net:
         parser.add_argument(
             "-s", "--sniffer", action="store_true",
             help="Launch packet sniffer to capture QEMU vfio-user traffic, requires --chip=x86-virt"
         )
+    else:
+        parser.set_defaults(sniffer=False)
     parser.add_argument(
         "-w", "--wait", action="store_true",
-        help='Wait for remote. Requires build with --opt="-DENABLE_NET=True"'
+        help='Wait for remote. Requires build with --opt="-DENABLE_NET=True" or --mmio option'
+    )
+    parser.add_argument(
+        "-m", "--mmio", action="store_true",
+        help="Enable MMIO Unix domain socket for external peripheral co-simulation"
     )
     args = parser.parse_args()
     return args
@@ -413,18 +464,20 @@ def main():
         fatal_exit(f"Firmware file not found: {target_image} Run compilation first.", help=True)
     print(f"\033[94m[Monitor] Target firmware located at:\033[0m {target_image}")
 
-    wait = args.wait
-    gdb_sock = Path(f"/tmp/gdb_{session_id}.sock")
-    uart_sock = [Path(f"/tmp/uart1_{session_id}.sock")]
+    extra_remote = build_status(args.chip, "ENABLE_NET") or args.mmio
+    ctx = SessionContext(
+        session_id=session_id,
+        args=args,
+        image_elf=image_elf,
+        enable_dbg=enable_dbg,
+        enable_net=enable_net,
+        wait= False if (enable_dbg and args.debug and extra_remote) else args.wait
+    )
 
-    if build_status(args.chip, "ENABLE_NET"):
-        uart_sock.append(Path(f"/tmp/uart2_{session_id}.sock"))
-        if enable_dbg and args.debug:
-            wait = False
-    qemu_bin, qemu_args, bridge_proc, sniffer_proc, bridge_image = setup_qemu_env(args, session_id, image_elf, uart_sock, enable_net, wait)
+    qemu_bin, qemu_args, bridge_proc, sniffer_proc, bridge_image = setup_qemu_env(ctx)
 
-    if enable_dbg and args.debug:
-        qemu_args.extend(["-gdb", f"unix:{gdb_sock},server=on,wait=off", "-S"])
+    if ctx.gdb_sock:
+        qemu_args.extend(["-gdb", f"unix:{ctx.gdb_sock},server=on,wait=off", "-S"])
 
     gdb_proc, qemu_proc, socat_proc = [], None, None
 
@@ -444,15 +497,17 @@ def main():
         print(f"[Monitor] Waiting for QEMU to start...")
         start_time = time.time()
         qemu_ready = False
+        sock = ctx.mmio_sock if (ctx.mmio_sock and ctx.wait) else ctx.uart_sock[0]
 
         while time.time() - start_time < 3.0:
             if qemu_proc.poll() is not None:
                 print("\033[91m[Monitor] Error: QEMU exited unexpectedly.\033[0m")
                 sys.exit(1)
             try:
-                qemu_ready = True
-                time.sleep(0.5)
-                break
+                if sock.exists():
+                    qemu_ready = True
+                    break
+                time.sleep(0.05)
             except (ConnectionRefusedError, OSError):
                 time.sleep(0.05)
 
@@ -464,12 +519,12 @@ def main():
         print("\033[92m[Monitor] Spawning Terminal for Serial (socat) Console...\033[0m")
         socat_cmd = [
             "xterm", "-hold", "-title", f"Session {session_id} UART Console {arch}/{args.chip}",
-            "-e", "socat", f"-,rawer", f"unix-connect:{uart_sock[0]}"
+            "-e", "socat", f"-,rawer", f"unix-connect:{ctx.uart_sock[0]},forever,interval=0.2"
         ]
         socat_proc = subprocess.Popen(socat_cmd, env=current_env)
         time.sleep(0.5) # Let socat connect and unblock QEMU
 
-        if enable_dbg and args.debug:
+        if ctx.gdb_sock:
             print("\033[92m[Monitor] Spawning Terminal for Debugging (gdb)...\033[0m")
             if args.chip == "x86-virt" and args.bridge:
                 if not bridge_image.exists():
@@ -479,7 +534,7 @@ def main():
                 gdb_proc.append(start_gdb(args, gdb_arch, None, "Bridge x86-64", bridge_image, session_id))
 
             gdb_arch = arch
-            gdb_proc.append(start_gdb(args, gdb_arch, gdb_sock, f"{arch}/{args.chip}", image_elf, session_id))
+            gdb_proc.append(start_gdb(args, gdb_arch, ctx.gdb_sock, f"{arch}/{args.chip}", image_elf, session_id))
 
         print("\033[94m[Monitor] Press 'Ctrl + ]' to exit.\033[0m")
         old_settings = termios.tcgetattr(sys.stdin.fileno())
@@ -516,11 +571,7 @@ def main():
         print("\r\033[K", end="")
         print("\r\033[96m[Monitor] Tearing down infrastructure...\033[0m")
 
-        for sock in uart_sock:
-            try:
-                sock.unlink(missing_ok=True)
-            except Exception:
-                pass
+        ctx.cleanup_sockets()
 
         if sniffer_proc:
             print("[Monitor] Tearing down vfio-user packet sniffer")
@@ -571,10 +622,6 @@ def main():
                     pass
 
         if len(gdb_proc) > 0:
-            try:
-                gdb_sock.unlink(missing_ok=True)
-            except Exception:
-                pass
             gdb_script = Path.cwd() / "build" / f".gdb_init_session_{session_id}"
             gdb_bridge_script = Path.cwd() / "build" / f".gdb_bridge_init_session_{session_id}"
             try:
